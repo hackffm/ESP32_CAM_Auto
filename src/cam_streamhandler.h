@@ -4,6 +4,7 @@ static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" 
 static const char* _STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
 static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
+int quality = 30;
 int fps = 0; int fps_count = 0; 
 int bps = 0; int bps_count = 0;
 uint32_t last_fps_time = 0; // checked in main_loop
@@ -50,7 +51,7 @@ static esp_err_t stream_handler(httpd_req_t *req){
     } else {
       if(fb->width > 100){
         if(fb->format != PIXFORMAT_JPEG){
-          bool jpeg_converted = frame2jpg(fb, 80, &_jpg_buf, &_jpg_buf_len);
+          bool jpeg_converted = frame2jpg(fb, quality, &_jpg_buf, &_jpg_buf_len);
           esp_camera_fb_return(fb);
           fb = NULL;
           if(!jpeg_converted){

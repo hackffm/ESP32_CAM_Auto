@@ -320,9 +320,22 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     }
 
     /* ============= SEND DATA ============= */
+    let retryTimeout = null;
     function sendData(force=false) {
       const now = Date.now();
-      if (!force && now - lastSendTime < UPDATE_INTERVAL) return;
+      // Rate-Limit 
+      if (!force && now - lastSendTime < UPDATE_INTERVAL) {
+        if (!retryTimeout) {
+          retryTimeout = setTimeout(() => {
+            sendData(false);
+          }, UPDATE_INTERVAL - (now - lastSendTime));
+        }
+        return;
+      }
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+        retryTimeout = null;
+      }
       lastSendTime = now;
 
       const axis = calculateAxis(stick.x, stick.y);
@@ -379,8 +392,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`;
     }
 
-    photo.onerror = () => setTimeout(loadStream, 2000);
-    setInterval(loadStream, 60000);
+    photo.onerror = () => setTimeout(loadStream, 5000);
+    //setInterval(loadStream, 60000);
 
     /* ============= INPUT EVENTS ============= */
     canvas.addEventListener("mousedown", e => {

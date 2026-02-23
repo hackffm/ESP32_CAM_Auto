@@ -5,7 +5,7 @@
   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 *********/
 
-const char* ROBOTER_NAME = "cambot-proto1"; // only use a-z, 0-9 and - in the name 
+const char* ROBOTER_NAME = "cambot-tut"; // only use a-z, 0-9 and - in the name 
 
 // GPIO12 Gelb
 // GPIO13 Grün
@@ -26,7 +26,7 @@ const char* ROBOTER_NAME = "cambot-proto1"; // only use a-z, 0-9 and - in the na
 // see attic/MyCreds.h for an example
 #if defined __has_include
 #  if __has_include (<MyCredsHackffm.h>)
-#    include <MyCredsHackffm.h>  // Define WIFI_SSID and WIFI_PASSWORD here - see file in Attic for example
+#    include <MyCredsHackffm.h>  // Define WIFI_SSID and WIFI_PASSWORD here - put this file in /<HOME>/.platformio/lib/MyCreds/MyCredsHackffm.h
 #  endif
 #endif
 
@@ -44,6 +44,9 @@ const char* password = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #include "soc/soc.h"             // disable brownout problems
 #include "soc/rtc_cntl_reg.h"    // disable brownout problems
 #include "esp_http_server.h"
+#include <ESP32Servo.h>
+
+Servo servo1;
 
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) { return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow; }
 
@@ -68,7 +71,7 @@ static esp_err_t index_handler(httpd_req_t *req){
 static esp_err_t info_handler(httpd_req_t *req){
   char info[512];
   snprintf(info, sizeof(info), "Free heap: %u bytes, WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", ESP.getFreeHeap(), WiFi.RSSI(), fps, bps/1024);
-  snprintf(info + strlen(info), sizeof(info) - strlen(info), "| Name=\"%s\", A=\"FPS-Limit (%d ms)\", B=\"Quality\", C=\"LED\", D=\"Servo1\", E=\"Servo2\" ", ROBOTER_NAME, frame_limit_ms);
+  snprintf(info + strlen(info), sizeof(info) - strlen(info), "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED\", D=\"Servo\", E=\"E\" ", ROBOTER_NAME, 1000/frame_limit_ms, quality);
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -125,12 +128,17 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   float a = key_values[2]/127.0; // Convert to -1.0 to 1.0
   float b = key_values[3]/127.0; // Convert to -1.0 to 1.0
   float c = key_values[4]/127.0; // Convert to -1.0 to 1.0
+  float d = key_values[5]/127.0; // Convert to -1.0 to 1.0
+  float e = key_values[6]/127.0; // Convert to -1.0 to 1.0
   float motor_left = y + x;
   float motor_right = y - x;
+  
+  servo1.write(mapFloat(d, -1.0, 1.0, 0, 180));
 
-  frame_limit_ms = mapFloat(a, -1.0, 1.0, 25.0, 250.0); 
-  analogWrite(4, constrain(c * 255, 0, 255)); // LED brightness control
-  int quality = constrain(((1.0-b)/2.0)*63,0, 63);  // 0...63 lower=higher quality
+  frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
+  analogWrite(WHITE_LED_PIN, constrain(c * 255, 0, 255)); // LED brightness control
+  analogWrite(RED_LED_PIN, constrain((1.0+c) * 255, 0, 255)); // LED brightness control
+  quality = constrain(((1.0-b)/2.0)*63,4, 63);  // 0...63 lower=higher quality
   static int prev_quality = 10;
   if(quality != prev_quality) { s->set_quality(s, quality); prev_quality = quality; }
 
@@ -213,10 +221,11 @@ void startCameraServer(){
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   
-  pinMode(MOTOR_1_PIN_1, OUTPUT);
-  pinMode(MOTOR_1_PIN_2, OUTPUT);
-  pinMode(MOTOR_2_PIN_1, OUTPUT);
-  pinMode(MOTOR_2_PIN_2, OUTPUT);
+  pinMode(MOTOR_1_PIN_1, OUTPUT); analogWriteFrequency(MOTOR_1_PIN_1, 20000); 
+  pinMode(MOTOR_1_PIN_2, OUTPUT); analogWriteFrequency(MOTOR_1_PIN_2, 20000); 
+  pinMode(MOTOR_2_PIN_1, OUTPUT); analogWriteFrequency(MOTOR_2_PIN_1, 20000); 
+  pinMode(MOTOR_2_PIN_2, OUTPUT); analogWriteFrequency(MOTOR_2_PIN_2, 20000); 
+  servo1.attach(SERVO_1_PIN); servo1.write(90); // Center position
   
   Serial.begin(115200);
   Serial.setDebugOutput(false);
@@ -244,14 +253,15 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG; 
+  //config.fb_location = CAMERA_FB_IN_DRAM;
   
   if(psramFound()){
     config.frame_size = FRAMESIZE_VGA;
-    config.jpeg_quality = 10;
+    config.jpeg_quality = 30;
     config.fb_count = 2;
   } else {
-    config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 12;
+    config.frame_size = FRAMESIZE_VGA;
+    config.jpeg_quality = 30;
     config.fb_count = 1;
   }
   
