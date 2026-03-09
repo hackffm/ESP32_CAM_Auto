@@ -36,6 +36,7 @@ const char* password = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
 #include "esp_camera.h"
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <ESPmDNS.h>
 #include "esp_timer.h"
 #include "img_converters.h"
@@ -44,9 +45,11 @@ const char* password = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #include "soc/soc.h"             // disable brownout problems
 #include "soc/rtc_cntl_reg.h"    // disable brownout problems
 #include "esp_http_server.h"
-#include <ESP32Servo.h>
+#include "driver/ledc.h" 
+#include <ArduinoOTA.h>
 
-Servo servo1;
+WiFiMulti wifiMulti;
+float servo1_target = 90.0; float servo1_current = 90.0; uint32_t last_servo_move_time = 0; const uint32_t servo_move_interval_ms = 20;
 
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) { return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow; }
 
@@ -68,9 +71,10 @@ static esp_err_t index_handler(httpd_req_t *req){
   return httpd_resp_send(req, (const char *)INDEX_HTML, strlen(INDEX_HTML));
 }
 
+char infotext[256] = "";
 static esp_err_t info_handler(httpd_req_t *req){
-  char info[512];
-  snprintf(info, sizeof(info), "Free heap: %u bytes, WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", ESP.getFreeHeap(), WiFi.RSSI(), fps, bps/1024);
+  static char info[2048];
+  snprintf(info, sizeof(info), "%s, Free heap: %u bytes, WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", infotext, ESP.getFreeHeap(), WiFi.RSSI(), fps, bps/1024);
   snprintf(info + strlen(info), sizeof(info) - strlen(info), "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED\", D=\"Servo\", E=\"E\" ", ROBOTER_NAME, 1000/frame_limit_ms, quality);
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
@@ -123,17 +127,18 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   }
 
   sensor_t * s = esp_camera_sensor_get();
-  float x = key_values[0]/127.0; // Convert to -1.0 to 1.0
-  float y = key_values[1]/127.0; // Convert to -1.0 to 1.0
+  int x = key_values[0]; // -255 to 255
+  int y = key_values[1]; // -255 to 255
   float a = key_values[2]/127.0; // Convert to -1.0 to 1.0
   float b = key_values[3]/127.0; // Convert to -1.0 to 1.0
   float c = key_values[4]/127.0; // Convert to -1.0 to 1.0
   float d = key_values[5]/127.0; // Convert to -1.0 to 1.0
   float e = key_values[6]/127.0; // Convert to -1.0 to 1.0
-  float motor_left = y + x;
-  float motor_right = y - x;
+  int motor_left = y + x;
+  int motor_right = y - x;
   
-  servo1.write(mapFloat(d, -1.0, 1.0, 0, 180));
+  servo1_target = mapFloat(d, -1.0, 1.0, 0, 180);
+  analogWrite(SERVO_1_PIN, mapFloat(d, -1.0, 1.0, 192, 2386) );
 
   frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
   analogWrite(WHITE_LED_PIN, constrain(c * 255, 0, 255)); // LED brightness control
@@ -143,15 +148,15 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   if(quality != prev_quality) { s->set_quality(s, quality); prev_quality = quality; }
 
   #ifdef MOTOR_LOW_IDLE
-    int mot_l1 = constrain(motor_left * 255, 0, 255);
-    int mot_l2 = constrain(-motor_left * 255, 0, 255);
-    int mot_r1 = constrain(motor_right * 255, 0, 255);
-    int mot_r2 = constrain(-motor_right * 255, 0, 255);
+    int mot_l1 = constrain(motor_left, 0, 255);
+    int mot_l2 = constrain(-motor_left, 0, 255);
+    int mot_r1 = constrain(motor_right, 0, 255);
+    int mot_r2 = constrain(-motor_right, 0, 255);
   #else
-    int mot_l1 = constrain(-motor_left * 255, 0, 255);
-    int mot_l2 = constrain(motor_left * 255, 0, 255);
-    int mot_r1 = constrain(-motor_right * 255, 0, 255);
-    int mot_r2 = constrain(motor_right * 255, 0, 255);
+    int mot_l1 = constrain(-motor_left, 0, 255);
+    int mot_l2 = constrain(motor_left, 0, 255);
+    int mot_r1 = constrain(-motor_right, 0, 255);
+    int mot_r2 = constrain(motor_right, 0, 255);
 
     if(mot_l1 == 0) mot_l1 = 255; else mot_l1 = 255 - mot_l1;
     if(mot_l2 == 0) mot_l2 = 255; else mot_l2 = 255 - mot_l2;
@@ -225,8 +230,14 @@ void setup() {
   pinMode(MOTOR_1_PIN_2, OUTPUT); analogWriteFrequency(MOTOR_1_PIN_2, 20000); 
   pinMode(MOTOR_2_PIN_1, OUTPUT); analogWriteFrequency(MOTOR_2_PIN_1, 20000); 
   pinMode(MOTOR_2_PIN_2, OUTPUT); analogWriteFrequency(MOTOR_2_PIN_2, 20000); 
-  servo1.attach(SERVO_1_PIN); servo1.write(90); // Center position
-  
+  analogWrite(MOTOR_1_PIN_1, 254); analogWrite(MOTOR_1_PIN_2, 254); // stop motors
+  analogWrite(MOTOR_2_PIN_1, 254); analogWrite(MOTOR_2_PIN_2, 254); // stop motors
+  pinMode(WHITE_LED_PIN, OUTPUT); analogWriteFrequency(WHITE_LED_PIN, 200000); analogWrite(WHITE_LED_PIN, 1); // LED off
+  pinMode(SERVO_1_PIN, OUTPUT); analogWriteFrequency(SERVO_1_PIN, 50); analogWriteResolution(SERVO_1_PIN, 14);  // Servo control
+  analogWrite(SERVO_1_PIN, 1289); // 0 degree position
+
+
+   
   Serial.begin(115200);
   Serial.setDebugOutput(false);
   uint32_t psramSize = psramFound() ? ESP.getPsramSize() : 0;
@@ -258,7 +269,7 @@ void setup() {
   if(psramFound()){
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 30;
-    config.fb_count = 2;
+    config.fb_count = 3;
   } else {
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 30;
@@ -275,23 +286,58 @@ void setup() {
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(ROBOTER_NAME); 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+  wifiMulti.addAP(ssid, password);
+  //WiFi.begin(ssid, password);
+  //while (WiFi.status() != WL_CONNECTED) {
+  while(wifiMulti.run() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
   Serial.printf("\nWiFi connected. Camera Stream Ready! Go to: http://%s or http://%s.local\n", WiFi.localIP().toString().c_str(), ROBOTER_NAME);
   MDNS.begin(ROBOTER_NAME);
   MDNS.addService("_http", "_tcp", 80);
-  
+  //ArduinoOTA.begin(); ArduinoOTA.setHostname(ROBOTER_NAME); // allow OTA updates
+
   sensor_t * s = esp_camera_sensor_get();
-  s->set_hmirror(s, 1);
-  s->set_vflip(s, 0);          // 0 = disable , 1 = enable
+  camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
+  if((info->model == CAMERA_OV3660)) {
+    s->set_hmirror(s, 1);
+    s->set_vflip(s, 0);          // 0 = disable , 1 = enable
+  }
 
   // Start streaming web server
   startCameraServer();
+  
+  //analogWrite(WHITE_LED_PIN, 254); // LED low
+  Serial.printf("ledcClockSource %d\n", ledcGetClockSource());
+  
+  
+  Serial.println("===== Camera sensor info =====");
+  Serial.print("Model enum: ");
+  Serial.println((int)info->model);
+
+  Serial.print("Name: ");
+  Serial.println(info->name);
+
+  sprintf(infotext, "BSSID: %s, Camera: %s", WiFi.BSSIDstr().c_str(), info->name);
+
+  for(int i = 0; i < LEDC_CHANNEL_MAX; i++) {
+    Serial.printf("LS Channel %u Duty: %u\n", i, ledc_get_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)i));
+  }
+  for(int i = 0; i < LEDC_TIMER_MAX; i++) {
+    Serial.printf("LS Timer %u Freq: %u Hz\n", i, ledc_get_freq(LEDC_LOW_SPEED_MODE, (ledc_timer_t)i));
+  } 
+  for(int i = 0; i < LEDC_CHANNEL_MAX; i++) {
+    Serial.printf("HS Channel %u Duty: %u\n", i, ledc_get_duty(LEDC_HIGH_SPEED_MODE, (ledc_channel_t)i));
+  }
+  for(int i = 0; i < LEDC_TIMER_MAX; i++) {
+    Serial.printf("HS Timer %u Freq: %u Hz\n", i, ledc_get_freq(LEDC_HIGH_SPEED_MODE, (ledc_timer_t)i));
+  } 
 }
 
 void loop() {
   calc_fps();
+  //ArduinoOTA.handle(); // allow OTA updates
+
+  delay(10);
 }

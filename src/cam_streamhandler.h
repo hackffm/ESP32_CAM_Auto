@@ -4,12 +4,12 @@ static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" 
 static const char* _STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
 static const char* _STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
 
-int quality = 30;
+int quality = 20;
 int fps = 0; int fps_count = 0; 
 int bps = 0; int bps_count = 0;
 uint32_t last_fps_time = 0; // checked in main_loop
 uint32_t last_frame_time = 0; // checked in main_loop
-uint32_t frame_limit_ms = 100; // default to 10 fps, can be set from web interface
+uint32_t frame_limit_ms = 50; // default to 20 fps, can be set from web interface
 
 void calc_fps() {
   uint32_t now = millis();

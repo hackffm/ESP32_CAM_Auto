@@ -159,7 +159,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     const LIMIT_RADIUS = 150;
     const DEADZONE_RADIUS = 40;
     const STICK_RADIUS = 25;
-    const MAX_VALUE = 127;
+    const MAX_VALUE = 255;
     const UPDATE_INTERVAL = 50;
     /* ========================================== */
 
@@ -197,11 +197,12 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       const value = document.createElement("div");
       value.className = "slider-value";
       value.textContent = "0";
+      if(letter === "A") input.value = 100;
 
       input.addEventListener("input", () => {
         sliderValues[letter] = parseInt(input.value);
         value.textContent = input.value;
-        sendData(true);
+        sendData(false);
       });
 
       row.appendChild(input);
