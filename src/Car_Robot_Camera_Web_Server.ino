@@ -5,7 +5,7 @@
   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 *********/
 
-const char* ROBOTER_NAME = "cambot-tut"; // only use a-z, 0-9 and - in the name 
+const char* ROBOTER_NAME = "cam-gh42"; // only use a-z, 0-9 and - in the name 
 
 // GPIO12 Gelb
 // GPIO13 Grün
@@ -36,6 +36,7 @@ const char* password = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
 #include "esp_camera.h"
 #include <WiFi.h>
+#include "esp_wifi.h"
 #include <WiFiMulti.h>
 #include <ESPmDNS.h>
 #include "esp_timer.h"
@@ -47,9 +48,14 @@ const char* password = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #include "esp_http_server.h"
 #include "driver/ledc.h" 
 #include <ArduinoOTA.h>
+#include "PwmThing.h"
+
+#define ENABLE_OTA 
+int OTA_Status = 0; // 0=not enabled, 1=enabled, 2=in progress
+
+PwmThing MotorLeft, MotorRight, WhiteLED, RedLED, Servo1;
 
 WiFiMulti wifiMulti;
-float servo1_target = 90.0; float servo1_current = 90.0; uint32_t last_servo_move_time = 0; const uint32_t servo_move_interval_ms = 20;
 
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) { return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow; }
 
@@ -126,49 +132,49 @@ static esp_err_t cmd_handler(httpd_req_t *req){
     return ESP_FAIL;
   }
 
-  sensor_t * s = esp_camera_sensor_get();
+  // 
   int x = key_values[0]; // -255 to 255
-  int y = key_values[1]; // -255 to 255
+  int y = key_values[1]; // -255 to 255  
+  if(y<0) x = -x; // when going backwards, invert x for better control
+  int motor_left = y + x;
+  int motor_right = y - x;
+  MotorLeft.set(motor_left);
+  MotorRight.set(motor_right); 
+
+  Servo1.set(key_values[5]*2);
+
   float a = key_values[2]/127.0; // Convert to -1.0 to 1.0
   float b = key_values[3]/127.0; // Convert to -1.0 to 1.0
   float c = key_values[4]/127.0; // Convert to -1.0 to 1.0
   float d = key_values[5]/127.0; // Convert to -1.0 to 1.0
   float e = key_values[6]/127.0; // Convert to -1.0 to 1.0
-  int motor_left = y + x;
-  int motor_right = y - x;
-  
-  servo1_target = mapFloat(d, -1.0, 1.0, 0, 180);
-  analogWrite(SERVO_1_PIN, mapFloat(d, -1.0, 1.0, 192, 2386) );
+ 
+ 
+  //servo1_target = mapFloat(d, -1.0, 1.0, 0, 180);
+  //analogWrite(SERVO_1_PIN, mapFloat(d, -1.0, 1.0, 192, 2386) );
 
   frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
-  analogWrite(WHITE_LED_PIN, constrain(c * 255, 0, 255)); // LED brightness control
-  analogWrite(RED_LED_PIN, constrain((1.0+c) * 255, 0, 255)); // LED brightness control
+  //analogWrite(WHITE_LED_PIN, constrain(c * 255, 0, 255)); // LED brightness control
+  if(c > 0) {
+    WhiteLED.set(constrain(c * 255, 0, 255));
+    RedLED.set(0);
+  } else {
+    WhiteLED.set(0);
+    RedLED.set(constrain(c * -255, 0, 255));
+  }
+  //analogWrite(RED_LED_PIN, constrain((1.0+c) * 255, 0, 255)); // LED brightness control
+
   quality = constrain(((1.0-b)/2.0)*63,4, 63);  // 0...63 lower=higher quality
   static int prev_quality = 10;
-  if(quality != prev_quality) { s->set_quality(s, quality); prev_quality = quality; }
-
-  #ifdef MOTOR_LOW_IDLE
-    int mot_l1 = constrain(motor_left, 0, 255);
-    int mot_l2 = constrain(-motor_left, 0, 255);
-    int mot_r1 = constrain(motor_right, 0, 255);
-    int mot_r2 = constrain(-motor_right, 0, 255);
-  #else
-    int mot_l1 = constrain(-motor_left, 0, 255);
-    int mot_l2 = constrain(motor_left, 0, 255);
-    int mot_r1 = constrain(-motor_right, 0, 255);
-    int mot_r2 = constrain(motor_right, 0, 255);
-
-    if(mot_l1 == 0) mot_l1 = 255; else mot_l1 = 255 - mot_l1;
-    if(mot_l2 == 0) mot_l2 = 255; else mot_l2 = 255 - mot_l2;
-    if(mot_r1 == 0) mot_r1 = 255; else mot_r1 = 255 - mot_r1;
-    if(mot_r2 == 0) mot_r2 = 255; else mot_r2 = 255 - mot_r2;
-  #endif
-
-  analogWrite(MOTOR_1_PIN_1, mot_l1);
-  analogWrite(MOTOR_1_PIN_2, mot_l2);
-  analogWrite(MOTOR_2_PIN_1, mot_r1);
-  analogWrite(MOTOR_2_PIN_2, mot_r2);
+  if(quality != prev_quality) { 
+    sensor_t * s = esp_camera_sensor_get();
+    s->set_quality(s, quality); 
+    prev_quality = quality; 
+  }
   
+
+
+
   if(res){
     return httpd_resp_send_500(req);
   }
@@ -226,16 +232,18 @@ void startCameraServer(){
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
   
-  pinMode(MOTOR_1_PIN_1, OUTPUT); analogWriteFrequency(MOTOR_1_PIN_1, 20000); 
-  pinMode(MOTOR_1_PIN_2, OUTPUT); analogWriteFrequency(MOTOR_1_PIN_2, 20000); 
-  pinMode(MOTOR_2_PIN_1, OUTPUT); analogWriteFrequency(MOTOR_2_PIN_1, 20000); 
-  pinMode(MOTOR_2_PIN_2, OUTPUT); analogWriteFrequency(MOTOR_2_PIN_2, 20000); 
-  analogWrite(MOTOR_1_PIN_1, 254); analogWrite(MOTOR_1_PIN_2, 254); // stop motors
-  analogWrite(MOTOR_2_PIN_1, 254); analogWrite(MOTOR_2_PIN_2, 254); // stop motors
-  pinMode(WHITE_LED_PIN, OUTPUT); analogWriteFrequency(WHITE_LED_PIN, 200000); analogWrite(WHITE_LED_PIN, 1); // LED off
-  pinMode(SERVO_1_PIN, OUTPUT); analogWriteFrequency(SERVO_1_PIN, 50); analogWriteResolution(SERVO_1_PIN, 14);  // Servo control
-  analogWrite(SERVO_1_PIN, 1289); // 0 degree position
+  MotorLeft.begin(MOTOR_2_PIN_1, MOTOR_2_PIN_2, PwmThing::halfBridgeIdleHigh, true);
+  MotorRight.begin(MOTOR_1_PIN_1, MOTOR_1_PIN_2, PwmThing::halfBridgeIdleHigh, true);
+  Servo1.begin(SERVO_1_PIN, -1, PwmThing::servoMotor);
 
+ // MotorLeft.begin(12, -1, PwmThing::servoMotor0Stop, false);
+ // MotorRight.begin(13, -1, PwmThing::servoMotor0Stop, true);
+ // Servo1.begin(15, -1, PwmThing::servoMotor, false);
+
+  WhiteLED.begin(WHITE_LED_PIN, -1, PwmThing::pwmOutGamma, false);
+  RedLED.begin(RED_LED_PIN, -1, PwmThing::pwmOutGamma, true);
+  
+  WhiteLED.set(1); // LED off
 
    
   Serial.begin(115200);
@@ -262,7 +270,7 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.xclk_freq_hz = 8000000;
   config.pixel_format = PIXFORMAT_JPEG; 
   //config.fb_location = CAMERA_FB_IN_DRAM;
   
@@ -282,6 +290,19 @@ void setup() {
     Serial.printf("Camera init failed with error 0x%x", err);
     return;
   }
+
+  sensor_t * s = esp_camera_sensor_get();
+  camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
+  if((info->model == CAMERA_OV3660)) {
+    s->set_hmirror(s, 1);
+    s->set_vflip(s, 0);          // 0 = disable , 1 = enable
+    //s->set_xclk(s, LEDC_TIMER_0, 8000000UL);
+    s->set_pll(s, 0, 25, 1, 0, 0, 0, 1, 10); // pushes 8MHz ext to same internally as 20mhz before
+    s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio
+    s->set_reg(s, 0x6706, 0x0f, 0x03); // Adjust temperature sampling frequency to 8 MHz XVCLK
+
+  }
+
   // Wi-Fi connection
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(ROBOTER_NAME); 
@@ -293,17 +314,25 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
+  //esp_wifi_set_max_tx_power(40);
+  //WiFi.setSleep(false);
   Serial.printf("\nWiFi connected. Camera Stream Ready! Go to: http://%s or http://%s.local\n", WiFi.localIP().toString().c_str(), ROBOTER_NAME);
   MDNS.begin(ROBOTER_NAME);
   MDNS.addService("_http", "_tcp", 80);
-  //ArduinoOTA.begin(); ArduinoOTA.setHostname(ROBOTER_NAME); // allow OTA updates
+  #ifdef ENABLE_OTA
+    ArduinoOTA.onStart([]() {
+      // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      Serial.println("Start updating ");
+      WhiteLED.set(1); 
+      RedLED.set(255); // Red LED on to indicate OTA in progress
+      OTA_Status = 2; // Set status to in progress
+    });
+    ArduinoOTA.setHostname(ROBOTER_NAME);
+    OTA_Status = 1;
+    ArduinoOTA.begin();  
+  #endif
 
-  sensor_t * s = esp_camera_sensor_get();
-  camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
-  if((info->model == CAMERA_OV3660)) {
-    s->set_hmirror(s, 1);
-    s->set_vflip(s, 0);          // 0 = disable , 1 = enable
-  }
+
 
   // Start streaming web server
   startCameraServer();
@@ -319,25 +348,22 @@ void setup() {
   Serial.print("Name: ");
   Serial.println(info->name);
 
-  sprintf(infotext, "BSSID: %s, Camera: %s", WiFi.BSSIDstr().c_str(), info->name);
+  sprintf(infotext, "BSSID: %s, Camera: %s, Cam-Temp: %d°C", WiFi.BSSIDstr().c_str(), info->name, (int)s->get_reg(s, 0x6719, 0xff));
 
-  for(int i = 0; i < LEDC_CHANNEL_MAX; i++) {
-    Serial.printf("LS Channel %u Duty: %u\n", i, ledc_get_duty(LEDC_LOW_SPEED_MODE, (ledc_channel_t)i));
-  }
-  for(int i = 0; i < LEDC_TIMER_MAX; i++) {
-    Serial.printf("LS Timer %u Freq: %u Hz\n", i, ledc_get_freq(LEDC_LOW_SPEED_MODE, (ledc_timer_t)i));
-  } 
-  for(int i = 0; i < LEDC_CHANNEL_MAX; i++) {
-    Serial.printf("HS Channel %u Duty: %u\n", i, ledc_get_duty(LEDC_HIGH_SPEED_MODE, (ledc_channel_t)i));
-  }
-  for(int i = 0; i < LEDC_TIMER_MAX; i++) {
-    Serial.printf("HS Timer %u Freq: %u Hz\n", i, ledc_get_freq(LEDC_HIGH_SPEED_MODE, (ledc_timer_t)i));
-  } 
+  WhiteLED.printInfo();
+
 }
 
 void loop() {
   calc_fps();
-  //ArduinoOTA.handle(); // allow OTA updates
+
+  #ifdef ENABLE_OTA
+  ArduinoOTA.handle(); // allow OTA updates
+  if(OTA_Status == 2) { // All power to OTA updates
+    esp_camera_deinit();
+    while(1) { delay(1); ArduinoOTA.handle(); }
+  }
+  #endif
 
   delay(10);
 }

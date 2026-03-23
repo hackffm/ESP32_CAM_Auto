@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<body>
+<h1>JavaScript Events</h1>
+<h2>The addEventListener() Method</h2>
+
+<button id="myBtn">Time is?</button>
+
+<p id="demo"></p>
+
+<script>
+const btn = document.getElementById("myBtn");
+
+// Add EventListener to btn
+btn.addEventListener("click", function () {
+  document.getElementById("demo").innerHTML = Date();
+});
+
+window.addEventListener("gamepadconnected", (e) => {
+  const gp = navigator.getGamepads()[e.gamepad.index];
+  document.getElementById("demo").innerHTML = `Gamepad connected at index ${gp.index}: ${gp.id}. It has ${gp.buttons.length} buttons and ${gp.axes.length} axes. ${gp.axes[0]}`;
+});
+ 
+
+</script>
+
+</body>
+</html>
