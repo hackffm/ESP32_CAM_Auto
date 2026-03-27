@@ -1,140 +1,60 @@
-// NOT USED ANYMORE, now in data/index.html
-// added stream auto-reconnect, dynamic labels for sliders, joystick movement 3
-// Joystick nun nur über dem Bild und kleiner
-static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 <!DOCTYPE html>
-<html>
 <head>
-  <title>ESP32-CAM Robot</title>
-
-  <meta name="viewport"
-        content="width=device-width,
-                 initial-scale=1.0,
-                 minimum-scale=0.5,
-                 maximum-scale=5.0,
-                 user-scalable=yes">
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hackffm ESP32 CAM Bot</title>
   <style>
     body {
-      font-family: Arial, sans-serif;
-      margin: 0;
-      padding: 10px;
-      background: #080505;
-      color: white;
-      text-align: center;
-    }
+      font-family: sans-serif; margin: 0; /* font-size: 14px; */
+      padding: 10px; background: #080505; color: white; text-align: center; }
 
-    h1 {
-      margin: 4px 0;
-      color: #ea903c;
-    }
+    h1 { margin: 4px 0; color: #f0ad5e; }
 
     /* Make photo-container the positioning context for absolute joystick overlay */
-    #photo-container {
-      position: relative;
-      display: inline-block;
-      max-width: 100%;
-    }
+    #photo-container { position: relative; display: inline-block; max-width: 100%; }
 
-    #media-wrapper {
-      display: flex;
-      justify-content: center;
-      align-items: center;   
-      gap: 20px;
-      flex-wrap: wrap;       
-    }
+    #media-wrapper { display: flex; justify-content: center;
+      align-items: center; gap: 20px; flex-wrap: wrap; }
 
     /* Side-by-side mode for larger screens */
-    .side-mode {
-      flex-direction: row;
-    }
+    .side-mode { flex-direction: row; }
 
     /* Normal stacked mode */
-    .normal-mode {
-      flex-direction: column;
-    }
+    .normal-mode { flex-direction: column; }
 
     /* Joystick base styles */
-    #joystick {
-      margin: 0;
-      touch-action: none;
-      transition: all 0.2s ease;
-      z-index: 10;
-    }
+    #joystick { margin: 0; touch-action: none; transition: all 0.2s ease; z-index: 10; }
 
     /* Joystick in normal mode - centered below image */
-    .normal-mode #joystick {
-      display: block;
-      margin: 15px auto;
-      width: 300px;
-      height: 300px;
-    }
+    .normal-mode #joystick { display: block; margin: 15px auto; width: 300px; height: 300px; }
 
     /* Joystick overlay mode - absolute positioned over image */
-    .side-mode #joystick {
-      position: absolute;
-      right: 10px;
-      bottom: 10px;
+    .side-mode #joystick { position: absolute; right: 10px; bottom: 10px;
       /* Size calculated dynamically in JS, but start with reasonable size */
-      width: 210px;
-      height: 210px;
-      pointer-events: auto;
-    }
+      width: 210px; height: 210px; pointer-events: auto; }
 
-    #photo {
-      display: block;
-      max-width: 100%;
-      height: auto;
-    }
+    #photo { display: block; max-width: 100%; height: auto; }
 
-    #info {
-      font-family: monospace;
-      margin-top: 6px;
-      color: #aaa;
-      white-space: pre-wrap;
-    }
+    #info { font-family: monospace; margin-top: 6px; color: #aaa; white-space: pre-wrap; }
 
-    .mode-switch {
-      margin: 10px 0;
-    }
+    .mode-switch { margin: 10px 0; }
 
-    .sliders-wrapper {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      width: 95%;
-      max-width: 450px;
-      margin: 15px auto;
-      text-align: left;
-    }
+    .sliders-wrapper { display: flex; flex-direction: column; gap: 8px;
+       width: 95%; max-width: 450px; margin: 15px auto; text-align: left; }
+    .slider-container label { font-weight: bold; color: #8bdcf3; font-size: 14px; }
+    .slider-row { display: flex; align-items: center; gap: 10px; }
+    input[type=range] { flex: 1; height: 35px; }
+    .slider-value { min-width: 45px; font-weight: bold; color: #9b8bf3; }
 
-    .slider-container label {
-      font-weight: bold;
-      color: #8bdcf3;
-      font-size: 14px;
-    }
-
-    .slider-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    input[type=range] {
-      flex: 1;
-      height: 35px;
-    }
-
-    .slider-value {
-      min-width: 45px;
-      font-weight: bold;
-      color: #9b8bf3;
-    }
+    /* gpds = Gamepad selector styles */
+    .gpds_row { display: flex; gap: 8px; 
+      align-items: center; justify-content: center; flex-wrap: wrap; }
+    /* select, input { font-size: 12px; } */
+    .gpds_axes { margin-top: 5px; font-family: monospace; }
   </style>
 </head>
-
 <body>
-  <h1 id="title">ESP32-CAM Robot</h1>
+  <h1 id="title">Hackffm ESP32 CAM Bot</h1>
 
   <div id="media-wrapper" class="normal-mode">
     <div id="photo-container">
@@ -155,16 +75,36 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 
   <div class="sliders-wrapper" id="sliders"></div>
 
+  <div class="gpds_row">
+    Gamepad:
+    <select id="gpdsel_gamepadSelect"></select>
+  </div>  
+  <div class="gpds_row">
+    X Axis:
+    <select id="gpdsel_xAxis"></select>
+    <label><input type="checkbox" id="gpdsel_invertX">Invert</label>
+
+    Y Axis:
+    <select id="gpdsel_yAxis"></select>
+    <label><input type="checkbox" id="gpdsel_invertY">Invert</label>
+
+    <span>X: <span id="gpdsel_xVal">0.00</span></span>
+    <span>Y: <span id="gpdsel_yVal">0.00</span></span>
+  </div>
+  <div class="gpds_axes" id="gpdsel_axesDisplay"></div>
+
+  <br><br>
   <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC" alt="hackffm.de" />
   &copy; 2026 Hackerspace-FFM e.V.
 
-  <script>
+<script>
     /* ================= CONFIG ================= */
     const LIMIT_RADIUS = 150;
     const DEADZONE_RADIUS = 40;
     const STICK_RADIUS = 25;
     const MAX_VALUE = 255;
     const UPDATE_INTERVAL = 50;
+    let   STICK_COLOR = "rgba(255,165,0,0.3)";
     /* ========================================== */
 
     const canvas = document.getElementById("joystick");
@@ -172,7 +112,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     const photo = document.getElementById("photo");
     const titleElement = document.getElementById("title");
 
-    let stick = { x: 0, y: 0 };
+    let stick = { x: 0, y: 0 }; // x: -LIMIT_RADIUS = left, +LIMIT_RADIUS = right; y: -LIMIT_RADIUS = up, +LIMIT_RADIUS = down
     let dragging = false;
     let lastSendTime = 0;
 
@@ -236,7 +176,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
               STICK_RADIUS,
               0,
               Math.PI*2);
-      ctx.fillStyle = "rgba(255,165,0,0.3)";
+      ctx.fillStyle = STICK_COLOR;
       ctx.fill();
     }
 
@@ -245,15 +185,15 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       const wrapper = document.getElementById("media-wrapper");
       const overlayActive = document.getElementById("modeToggle").checked;
 
+      canvas.style.width = "300px";
+      canvas.style.height = "300px";
+
       if (!overlayActive) {
         /* Normal mode: joystick below image */
         wrapper.classList.remove("side-mode");
         wrapper.classList.add("normal-mode");
 
         canvas.style.position = "static";
-        canvas.style.width = "300px";
-        canvas.style.height = "300px";
-
       } else {
         /* Overlay mode: joystick over image, bottom-right corner */
         wrapper.classList.remove("normal-mode");
@@ -265,8 +205,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         const size = Math.min(availableWidth * 0.35, 250, window.innerWidth * 0.4); // Responsive size
 
         canvas.style.position = "absolute";
-        canvas.style.width = size + "px";
-        canvas.style.height = size + "px";
+        //canvas.style.width = size + "px";
+        //canvas.style.height = size + "px";
       }
 
       /* Redraw joystick after resize */
@@ -292,13 +232,16 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       let y = yPos - center.y;
 
       const dist = Math.hypot(x, y);
-
+      //console.log("Updating stick position based on input:", clientX-rect.left, clientY-rect.top, format_fix2(xPos), format_fix2(yPos), 
+      //  "=>", format_fix2(x), format_fix2(y), "Distance from center:", format_fix2(dist));
       if (dist > LIMIT_RADIUS) {
-        x = x * LIMIT_RADIUS / dist;
-        y = y * LIMIT_RADIUS / dist;
+      //  x = x * LIMIT_RADIUS / dist;
+      //  y = y * LIMIT_RADIUS / dist;
       }
 
-      stick = { x, y };
+      //console.log("Stick position after applying limit:", format_fix2(x), format_fix2(y));
+
+      stick = { x, y }; 
       sendData();
       drawJoystick();
     }
@@ -364,7 +307,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         const value = match[2];
 
         if (key === "Name") {
-          titleElement.textContent = value;
+          titleElement.textContent = "HackFFM-Bot: "+value;
+          document.title = "HackFFM-Bot: "+value;
         } else {
           const labelElement = document.getElementById("label"+key);
           if (labelElement)
@@ -393,12 +337,22 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     }
 
     /* ============= STREAM ============= */
-    function loadStream() {
-      photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`;
-    }
+    let streamRetryDelay = 1000;
+    function loadStream() { photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`; updateJoystickMode();}
 
-    photo.onerror = () => setTimeout(loadStream, 5000);
-    //setInterval(loadStream, 60000);
+    photo.onload = () => { console.log("StreamOnLoed"); streamRetryDelay = 1000; };
+    photo.onerror = () => { 
+      console.warn("Stream load error, retrying in " + streamRetryDelay + "ms");
+      setTimeout(loadStream, streamRetryDelay); 
+      streamRetryDelay = Math.min(streamRetryDelay * 2, 10000); 
+    };
+
+    // Optional: watchdog for stalled streams
+    setInterval(() => {
+      if (!photo.complete || photo.naturalWidth === 0) {
+        loadStream();
+      }
+    }, 10000);
 
     /* ============= INPUT EVENTS ============= */
     canvas.addEventListener("mousedown", e => {
@@ -424,6 +378,11 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 
     canvas.addEventListener("touchend", resetStick);
 
+    document.getElementById('media-wrapper').addEventListener('click', e => {
+      updateJoystickMode();
+      console.log("media-wrapper clicked, redrawing joystick");
+    });
+
     /* ============= INIT ============= */
     document.getElementById("modeToggle")
             .addEventListener("change", updateJoystickMode);
@@ -434,7 +393,93 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     drawJoystick();
     loadStream();
     updateInfo();
-  </script>
+
+
+
+  const gpdsel_gamepadSelect = document.getElementById('gpdsel_gamepadSelect');
+  const gpdsel_xAxisSelect = document.getElementById('gpdsel_xAxis');
+  const gpdsel_yAxisSelect = document.getElementById('gpdsel_yAxis');
+  const gpdsel_invertX = document.getElementById('gpdsel_invertX');
+  const gpdsel_invertY = document.getElementById('gpdsel_invertY');
+  const gpdsel_axesDisplay = document.getElementById('gpdsel_axesDisplay');
+  const gpdsel_xVal = document.getElementById('gpdsel_xVal');
+  const gpdsel_yVal = document.getElementById('gpdsel_yVal');
+
+  function gpdsel_populateGamepads() {
+    const gamepads = navigator.getGamepads();
+    gpdsel_gamepadSelect.innerHTML = '';
+    for (let i = 0; i < gamepads.length; i++) {
+      if (gamepads[i]) {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = `${i}: ${gamepads[i].id}`;
+        gpdsel_gamepadSelect.appendChild(opt);
+      }
+    }
+    let count = 6;
+    gpdsel_xAxisSelect.innerHTML = '';
+    gpdsel_yAxisSelect.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const optX = new Option(i, i);
+      const optY = new Option(i, i);
+      gpdsel_xAxisSelect.add(optX);
+      gpdsel_yAxisSelect.add(optY);
+    }
+  }
+
+  function format_fix2(v) { return (Math.round(v * 100) / 100).toFixed(2); }
+
+  let gpdsel_activityTimeout = null;
+
+  async function gpdsel_activityTimeoutFunction() {
+    console.log("Gamepad input timeout");
+    gpdsel_xVal.textContent = "0.00";
+    gpdsel_yVal.textContent = "0.00";
+    stick = { x:0, y:0 };
+    STICK_COLOR = "rgba(255,165,0,0.3)";
+    sendData(true);
+    drawJoystick();
+    gpdsel_activityTimeout = null;
+  }
+
+  function gpdsel_update() {
+    const gamepads = navigator.getGamepads();
+    const gp = gamepads[gpdsel_gamepadSelect.value];
+    if (!gp) return;
+    const axes = gp.axes.slice(0, 6);
+    gpdsel_axesDisplay.textContent = axes
+      .map((v, i) => `A${i}: ${format_fix2(v)}`)
+      .join(' | ');
+    let x = axes[gpdsel_xAxisSelect.value] || 0;
+    let y = axes[gpdsel_yAxisSelect.value] || 0;
+    if (gpdsel_invertX.checked) x *= -1;
+    if (gpdsel_invertY.checked) y *= -1;
+    gpdsel_xVal.textContent = format_fix2(x);
+    gpdsel_yVal.textContent = format_fix2(y);
+    if ((Math.abs(x) > 0.1) && (Math.abs(y) > 0.1)) {
+      if (gpdsel_activityTimeout !== null) {
+        clearTimeout(gpdsel_activityTimeout);
+        gpdsel_activityTimeout = null;
+      } 
+      console.log("Gamepad timeout set");
+      gpdsel_activityTimeout = setTimeout(gpdsel_activityTimeoutFunction, 2000);
+      STICK_COLOR = "rgba(255,0,165,0.3)";
+    }
+    if(gpdsel_activityTimeout !== null) {
+      console.log("Gamepad input:", format_fix2(x), format_fix2(y));
+      stick = { x: x * LIMIT_RADIUS, y: y * LIMIT_RADIUS };
+      sendData(true);
+      drawJoystick();
+    }
+  }
+
+  // Gamepad init stuff
+  window.addEventListener("gamepadconnected", gpdsel_populateGamepads);
+  window.addEventListener("gamepaddisconnected", gpdsel_populateGamepads);
+  gpdsel_populateGamepads();
+  setInterval(gpdsel_update, 100);
+
+</script>
+
 </body>
 </html>
-)rawliteral";

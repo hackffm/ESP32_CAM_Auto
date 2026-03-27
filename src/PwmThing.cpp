@@ -74,7 +74,7 @@ void PwmThing::set(int value) {
   value = constrain(value, -255, 255); // Constrain value to valid range
   lastValue = value;
   int duty;
-  Serial.printf("Pin %d = %d", pinA, value);
+  if(logValues) Serial.printf("Pin %d = %d", pinA, value);
 
   switch (thingType) {
     case pwmOut:
@@ -94,7 +94,7 @@ void PwmThing::set(int value) {
       if (pinB >= 0) {
           analogWrite(pinB, value);
       }
-      Serial.printf(", pwmOut %d\n", value);
+      if(logValues) Serial.printf(", pwmOut %d\n", value);
       break;
 
     case halfBridge:
@@ -110,7 +110,7 @@ void PwmThing::set(int value) {
         }
         analogWrite(pinA, phaseA);
         analogWrite(pinB, phaseB);
-        Serial.printf(", phaseA %d, phaseB %d\n", phaseA, phaseB);
+        if(logValues) Serial.printf(", phaseA %d, phaseB %d\n", phaseA, phaseB);
       }
       break;   
 
@@ -125,7 +125,7 @@ void PwmThing::set(int value) {
       if((thingType == servoMotor0Stop) && (value == 0)) duty = 0; // Turns servo off
       if (pinA >= 0) analogWrite(pinA, duty);
       if (pinB >= 0) analogWrite(pinB, duty);
-      Serial.printf(", servo duty %d\n", duty);
+      if(logValues) Serial.printf(", servo duty %d\n", duty);
       break;
 
     default:

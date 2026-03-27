@@ -24,6 +24,9 @@ public:
     // Method to set the value
     void set(int value);
 
+    // Method to get latest set value
+    int get() { return lastValue; }
+
     void printInfo();
 
 //private:
@@ -35,6 +38,8 @@ public:
     int servoMin = 768;
     int servoZero = 4760;
     int servoMax = 9544;
+
+    bool logValues = false;
     
 };
 
