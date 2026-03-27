@@ -35,7 +35,7 @@
 #endif
 
 // Replace with your network credentials, will be overwritten by values stored in LittleFS if available
-char roboter_name[34] = "cam-dev2"; // only use a-z, 0-9 and - in the name 
+char roboter_name[34] = "cam-camp"; // only use a-z, 0-9 and - in the name 
 char wifi_ssid[34] = WIFI_SSID;  // "REPLACE_WITH_YOUR_SSID";
 char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
@@ -66,7 +66,6 @@ PwmThing MotorLeft, MotorRight, WhiteLED, RedLED, Servo1;
 
 WiFiMulti wifiMulti;
 
-float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) { return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow; }
 
 #define CAMERA_MODEL_AI_THINKER
 //#define CAMERA_MODEL_M5STACK_PSRAM
@@ -76,93 +75,27 @@ float mapFloat(float value, float fromLow, float fromHigh, float toLow, float to
 
 #include "cam_pindefs.h"
 #include "cam_streamhandler.h"
-// #include "indexhtml8.h"  // not needed anymore, now in /data/index.html and served from LittleFS
+#include "indexhtml_intern.h"  // will be replaced if /data/index.html in LittleFS exists
+
+#include "helper_functions.h"
 
 uint32_t WhiteLedMaxOnTimeMs = 30000; // Prevent LED overheating
 int      WhiteLedTimeoutThresholdValue = 40; // Count down MaxOnTimeMs above this threshold, limit LED to this threshold afterwards
 
+
 fs::FS &filesystem = LittleFS;
-
-// Function to write a string to a file
-bool writeFile(const char *path, const char *data) {
-  File file = filesystem.open(path, "w", true); // "w" overwrite file
-  if (!file) {
-    Serial.println("Can't open file to write");
-    return false;
-  }
-  file.print(data);
-  file.close();
-  Serial.println("File written");
-  return true;
-}
-
-// Function to read a file and return the content as a string
-size_t readFile(const char *path, char *buffer, size_t bufferSize) {
-  if(filesystem.exists(path) == false) {
-    // LL_Log.printf("File %s does not exist\r\n", path);
-    return 0;
-  }
-  File file = filesystem.open(path, "r");  
-  if (!file) {
-    Serial.println("Can't open file for reading");
-    return 0;
-  }
-  size_t bytesRead = 0;
-  if(file.size() > 0) {
-    bytesRead = file.readBytes(buffer, bufferSize - 1); // Leave space for null terminator
-    buffer[bytesRead] = '\0'; // Null-terminate the string
-  }
-  file.close();
-  return bytesRead;
-}
-
-void listDir(const char *dirname, uint8_t levels) {
-  Serial.printf("Listing directory: %s\r\n", dirname);
-
-  fs::File root = filesystem.open(dirname);
-  if (!root) {
-    Serial.println("- failed to open directory");
-    return;
-  }
-  if (!root.isDirectory()) {
-    Serial.println(" - not a directory");
-    return;
-  }
-
-  fs::File file = root.openNextFile();
-  while (file) {
-    if (file.isDirectory()) {
-      Serial.print("  DIR : ");
-      Serial.println(file.name());
-      if (levels) {
-        listDir(file.path(), levels - 1);
-      }
-    } else {
-      Serial.print("  FILE: ");
-      Serial.print(file.name());
-      Serial.print("\tSIZE: ");
-      Serial.println(file.size());
-    }
-    file = root.openNextFile();
-  }
-
-  size_t t = LittleFS.totalBytes();
-  size_t u = LittleFS.usedBytes();
-  
-  Serial.printf("Total space: %d, used space: %d, free space: %d\r\n", t, u, t - u);
-}
 
 httpd_handle_t camera_httpd = NULL;
 httpd_handle_t stream_httpd = NULL;
 
-//static esp_err_t index_handler(httpd_req_t *req){
-//  httpd_resp_set_type(req, "text/html");
-//  return httpd_resp_send(req, (const char *)INDEX_HTML, strlen(INDEX_HTML));
-//}
-
 static esp_err_t index_handler(httpd_req_t *req)
 {
-  Serial.println("Serving index.html");
+  if(filesystem.exists("/index.html") == false) {
+    Serial.println("Serving internal index.html");
+    httpd_resp_set_type(req, "text/html");
+    return httpd_resp_send(req, (const char *)INDEX_HTML, strlen(INDEX_HTML));  
+  } 
+  Serial.println("Serving external index.html");
   File file = filesystem.open("/index.html", "r");
   if (!file) {
       httpd_resp_send_404(req);
@@ -191,8 +124,10 @@ char infotext[256] = "";
 static esp_err_t info_handler(httpd_req_t *req){
   static char info[2048];
 
-  snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u bytes, \r\nFree PSRAM: %u bytes, WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.RSSI(), fps, bps/1024);
-  snprintf(info + strlen(info), sizeof(info) - strlen(info), "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo\", E=\"E\" ", roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL));
+  snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u bytes, \r\nFree PSRAM: %u bytes, WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", 
+     infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.RSSI(), fps, bps/1024);
+  snprintf(info + strlen(info), sizeof(info) - strlen(info), "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo\", E=\"E\" ", 
+     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL));
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -214,6 +149,10 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   int num_keys = sizeof(query_keys) / sizeof(query_keys[0]);
   static int key_values[8] = {0,0,0,0,0,0,0,0}; // Array to hold the values of the query keys
   int res = -1;
+  char strbuf[120] = {0,};
+  char strbuf2[120] = {0,};
+
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
   buf_len = httpd_req_get_url_query_len(req) + 1;
   if (buf_len > 1) {
@@ -231,6 +170,22 @@ static esp_err_t cmd_handler(httpd_req_t *req){
           res = 0;
           //Serial.printf("Key: %s, Value: %d\n", query_keys[i], key_values[i]);
         } 
+      }
+      if((httpd_query_key_value(buf, "wifi_ssid", strbuf, sizeof(strbuf)) == ESP_OK) && 
+         (httpd_query_key_value(buf, "wifi_password", strbuf2, sizeof(strbuf2)) == ESP_OK)) {
+        bool noerrors = true;  
+        uri_decode(strbuf, strbuf, sizeof(strbuf));
+        uri_decode(strbuf2, strbuf2, sizeof(strbuf2));
+        strlcpy(wifi_ssid, strbuf, sizeof(wifi_ssid));
+        if(!writeFile("/wifi_ssid.txt", wifi_ssid)) noerrors = false;
+        strlcpy(wifi_password, strbuf2, sizeof(wifi_password));
+        if(!writeFile("/wifi_password.txt", wifi_password)) noerrors = false;
+        Serial.printf("Updated WiFi SSID: %s, Password: %s\n", wifi_ssid, wifi_password);
+        if(noerrors) {
+          httpd_resp_sendstr(req, "WiFi credentials updated successfully. Reboot to activate.");
+        } else {
+          httpd_resp_sendstr(req, "Failed to update WiFi credentials.");
+        }
       }
     } else {
       free(buf);
@@ -287,7 +242,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
     return httpd_resp_send_500(req);
   }
 
-  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  
   return httpd_resp_send(req, NULL, 0);
 }
 
@@ -344,11 +299,14 @@ void setup() {
   Serial.setDebugOutput(false);
   uint32_t psramSize = psramFound() ? ESP.getPsramSize() : 0;
   Serial.printf("Reset: PSRAM: %uMB, Flash: %uMB\n", psramSize / (1024 * 1024), ESP.getFlashChipSize() / (1024 * 1024));
+
+  WhiteLED.begin(WHITE_LED_PIN, -1, PwmThing::pwmOutGamma, false);
+  RedLED.begin(RED_LED_PIN, -1, PwmThing::pwmOutGamma, true);
   
   // Initialize filesystem
   if(!LittleFS.begin()) {
     Serial.println("filesystem Mount Failed");
-    return;
+    error_blink(3, 500);
   }
   listDir("/", 0); // List root directory for debugging
 
@@ -365,11 +323,6 @@ void setup() {
  // MotorLeft.begin(12, -1, PwmThing::servoMotor0Stop, false);
  // MotorRight.begin(13, -1, PwmThing::servoMotor0Stop, true);
  // Servo1.begin(15, -1, PwmThing::servoMotor, false);
-
-  WhiteLED.begin(WHITE_LED_PIN, -1, PwmThing::pwmOutGamma, false);
-  RedLED.begin(RED_LED_PIN, -1, PwmThing::pwmOutGamma, true);
-  
-  WhiteLED.set(1); // LED off
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -391,14 +344,13 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 8000000;
-  config.pixel_format = PIXFORMAT_JPEG; 
-  //config.fb_location = CAMERA_FB_IN_DRAM;
+  config.pixel_format = PIXFORMAT_JPEG;     
+  config.frame_size = FRAMESIZE_VGA;
+  config.jpeg_quality = 30;
+  config.fb_count = 3;
   
-  if(psramFound()){
-    config.frame_size = FRAMESIZE_VGA;
-    config.jpeg_quality = 30;
-    config.fb_count = 3;
-  } else {
+  if(!psramFound()){
+    config.fb_location = CAMERA_FB_IN_DRAM;
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 30;
     config.fb_count = 1;
@@ -408,7 +360,7 @@ void setup() {
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x", err);
-    return;
+    error_blink(2, 1000);
   }
 
   sensor_t * s = esp_camera_sensor_get();
@@ -436,6 +388,7 @@ void setup() {
 
   if(wifiMulti.run() != WL_CONNECTED) {
     Serial.println("Failed to connect to WiFi, opening AP mode.");
+    RedLED.set(255); // Red LED on to indicate WiFi connection failure
     WiFi.AP.begin();
     WiFi.AP.create(roboter_name);
     WiFi.AP.enableDhcpCaptivePortal();
@@ -457,10 +410,14 @@ void setup() {
   #ifdef ENABLE_OTA
     ArduinoOTA.onStart([]() {
       // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-      Serial.println("Start updating ");
-      WhiteLED.set(1); 
-      RedLED.set(255); // Red LED on to indicate OTA in progress
       OTA_Status = 2; // Set status to in progress
+      Serial.print("Start updating ");
+      WhiteLED.set(0); 
+      RedLED.set(255); // Red LED on to indicate OTA in progress
+      httpd_stop(camera_httpd);
+      httpd_stop(stream_httpd);
+      esp_camera_deinit();
+      Serial.println("... ");
     });
     ArduinoOTA.setHostname(roboter_name);
     OTA_Status = 1;
@@ -490,14 +447,10 @@ void setup() {
 }
 
 void loop() {
-  calc_fps();
+  if(OTA_Status < 2) calc_fps();
 
   #ifdef ENABLE_OTA
   ArduinoOTA.handle(); // allow OTA updates
-  if(OTA_Status == 2) { // All power to OTA updates
-    esp_camera_deinit();
-    while(1) { delay(1); ArduinoOTA.handle(); }
-  }
   #endif
 
   if(WhiteLED.get() > WhiteLedTimeoutThresholdValue) {

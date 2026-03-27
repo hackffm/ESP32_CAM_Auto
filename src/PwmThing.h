@@ -10,12 +10,12 @@ public:
 
     // Enum for thingType
     enum ThingType {
-        pwmOut,       // Standard PWM, 20kHz, 8-bit resolution, 0...255
-        pwmOutGamma,  // same as pwmOut, but with gamma correction for LED brightness control
-        halfBridge,   // Half-bridge control, 20kHz, 8-bit resolution, -255...+255 (negative values reverse direction)
-        halfBridgeIdleHigh, // as above, but both phases idle HIGH (often better for smoother motor running)
-        servoMotor,    // Servo control, 50Hz, 14-bit resolution, -255...+255 (maps to 0.5ms...2.5ms pulse width)
-        servoMotor0Stop, // as above, but with 0% duty cycle when value is 0
+        pwmOut = 0,       // Standard PWM, 20kHz, 8-bit resolution, 0...255
+        pwmOutGamma = 1,  // same as pwmOut, but with gamma correction for LED brightness control
+        halfBridge = 2,   // Half-bridge control, 20kHz, 8-bit resolution, -255...+255 (negative values reverse direction)
+        halfBridgeIdleHigh = 3, // as above, but both phases idle HIGH (often better for smoother motor running)
+        servoMotor = 4,    // Servo control, 50Hz, 14-bit resolution, -255...+255 (maps to 0.5ms...2.5ms pulse width)
+        servoMotor0Stop = 5 // as above, but with 0% duty cycle when value is 0
     };
 
     // Method to initialize the PwmThing

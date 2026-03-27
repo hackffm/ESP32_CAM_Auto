@@ -7,5 +7,4 @@
 ._.DS_Store
 **/.DS_Store
 **/._.DS_Store
-data/wifi_password.txt
-data/wifi_ssid.txt
+data/wifi_*

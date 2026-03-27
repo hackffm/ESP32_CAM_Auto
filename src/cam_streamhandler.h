@@ -44,7 +44,7 @@ static esp_err_t stream_handler(httpd_req_t *req){
   httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
   httpd_resp_set_hdr(req, "X-Framerate", "60");
 
-  while(true){
+  while(OTA_Status < 2){
     uint32_t now = millis();
     if((uint32_t)(now - last_frame_time) < (uint32_t)frame_limit_ms) {
       delay(frame_limit_ms - (uint32_t)(now - last_frame_time));

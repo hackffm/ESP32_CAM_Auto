@@ -81,17 +81,36 @@
   </div>  
   <div class="gpds_row">
     X Axis:
-    <select id="gpdsel_xAxis"></select>
+    <select id="gpdsel_xAxis">
+      <option value="0" selected>0</option><option value="1">1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+    </select>
     <label><input type="checkbox" id="gpdsel_invertX">Invert</label>
 
     Y Axis:
-    <select id="gpdsel_yAxis"></select>
+    <select id="gpdsel_yAxis">      
+      <option value="0">0</option><option value="1" selected>1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option><option value="5">5</option></select>
     <label><input type="checkbox" id="gpdsel_invertY">Invert</label>
 
     <span>X: <span id="gpdsel_xVal">0.00</span></span>
     <span>Y: <span id="gpdsel_yVal">0.00</span></span>
   </div>
   <div class="gpds_axes" id="gpdsel_axesDisplay"></div>
+
+  <br><br>
+
+  <div class="gpds_row">Configure WiFi:
+    <form action="/action" method="GET">
+      <label for="wifi_ssid">SSID:</label>
+      <input type="text" id="wifi_ssid" name="wifi_ssid">
+
+      <label for="wifi_password">Password:</label>
+      <input type="password" id="wifi_password" name="wifi_password">
+
+      <input type="submit" value="Save WiFi Credentials">
+    </form>
+  </div>
 
   <br><br>
   <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC" alt="hackffm.de" />
@@ -408,6 +427,10 @@
   function gpdsel_populateGamepads() {
     const gamepads = navigator.getGamepads();
     gpdsel_gamepadSelect.innerHTML = '';
+    const optdefault = document.createElement('option');
+    optdefault.value = -1;
+    optdefault.textContent = "No Gamepad";
+    gpdsel_gamepadSelect.appendChild(optdefault);
     for (let i = 0; i < gamepads.length; i++) {
       if (gamepads[i]) {
         const opt = document.createElement('option');
@@ -416,6 +439,7 @@
         gpdsel_gamepadSelect.appendChild(opt);
       }
     }
+    /*
     let count = 6;
     gpdsel_xAxisSelect.innerHTML = '';
     gpdsel_yAxisSelect.innerHTML = '';
@@ -425,6 +449,7 @@
       gpdsel_xAxisSelect.add(optX);
       gpdsel_yAxisSelect.add(optY);
     }
+    */
   }
 
   function format_fix2(v) { return (Math.round(v * 100) / 100).toFixed(2); }
@@ -456,13 +481,13 @@
     if (gpdsel_invertY.checked) y *= -1;
     gpdsel_xVal.textContent = format_fix2(x);
     gpdsel_yVal.textContent = format_fix2(y);
-    if ((Math.abs(x) > 0.1) && (Math.abs(y) > 0.1)) {
+    if ((Math.abs(x) > 0.1) || (Math.abs(y) > 0.1)) {
       if (gpdsel_activityTimeout !== null) {
         clearTimeout(gpdsel_activityTimeout);
         gpdsel_activityTimeout = null;
       } 
       console.log("Gamepad timeout set");
-      gpdsel_activityTimeout = setTimeout(gpdsel_activityTimeoutFunction, 2000);
+      gpdsel_activityTimeout = setTimeout(gpdsel_activityTimeoutFunction, 8000);
       STICK_COLOR = "rgba(255,0,165,0.3)";
     }
     if(gpdsel_activityTimeout !== null) {
@@ -477,7 +502,7 @@
   window.addEventListener("gamepadconnected", gpdsel_populateGamepads);
   window.addEventListener("gamepaddisconnected", gpdsel_populateGamepads);
   gpdsel_populateGamepads();
-  setInterval(gpdsel_update, 100);
+  setInterval(gpdsel_update, 75);
 
 </script>
 
