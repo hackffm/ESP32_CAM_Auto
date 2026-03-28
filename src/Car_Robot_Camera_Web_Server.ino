@@ -35,7 +35,7 @@
 #endif
 
 // Replace with your network credentials, will be overwritten by values stored in LittleFS if available
-char roboter_name[34] = "cam-camp"; // only use a-z, 0-9 and - in the name 
+char roboter_name[34] = "bot-tut2"; // only use a-z, 0-9 and - in the name 
 char wifi_ssid[34] = WIFI_SSID;  // "REPLACE_WITH_YOUR_SSID";
 char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
@@ -62,9 +62,25 @@ char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 int OTA_Status = 0; // 0=not enabled, 1=enabled, 2=in progress
 DNSServer dnsServer;
 
-PwmThing MotorLeft, MotorRight, WhiteLED, RedLED, Servo1;
+PwmThing MotorLeft, MotorRight, Servo1, Servo2, WhiteLED, RedLED;
 
 WiFiMulti wifiMulti;
+
+// Store data used in PwmThing.begin for Motors and Servos here in an array of a structto be stored in LittleFS and to be used on startup
+struct PwmThingConfig {
+  char name[20]; int pinA; int pinB; PwmThing::ThingType thingType; bool inverted;
+  int servoMin; int servoZero; int servoMax; /* Only for servos*/
+};
+
+// Create an array of PwmThingConfig for the motors and servos and populate it with default values
+const int numPwmThings = 4;
+PwmThingConfig pwmThingConfigs[numPwmThings] = {
+  {"MotorLeft", MOTOR_1_PIN_1, MOTOR_1_PIN_2, PwmThing::halfBridgeIdleHigh, false, 768, 4760, 9544},
+  {"MotorRight", MOTOR_2_PIN_1, MOTOR_2_PIN_2, PwmThing::halfBridgeIdleHigh, false, 768, 4760, 9544},
+  {"Servo1", SERVO_1_PIN, -1, PwmThing::servoMotor0Stop, false, 768, 4760, 9544},
+  {"Servo2", -1, -1, PwmThing::servoMotor, false, 768, 4760, 9544}
+};
+
 
 
 #define CAMERA_MODEL_AI_THINKER
@@ -80,10 +96,52 @@ WiFiMulti wifiMulti;
 #include "helper_functions.h"
 
 uint32_t WhiteLedMaxOnTimeMs = 30000; // Prevent LED overheating
-int      WhiteLedTimeoutThresholdValue = 40; // Count down MaxOnTimeMs above this threshold, limit LED to this threshold afterwards
+int      WhiteLedTimeoutThresholdValue = 44; // Count down MaxOnTimeMs above this threshold, limit LED to this threshold afterwards
 
 
 fs::FS &filesystem = LittleFS;
+
+void initPwmThings() {
+    MotorLeft.begin(pwmThingConfigs[0].pinA, pwmThingConfigs[0].pinB, pwmThingConfigs[0].thingType, pwmThingConfigs[0].inverted, 
+      pwmThingConfigs[0].servoMin, pwmThingConfigs[0].servoZero, pwmThingConfigs[0].servoMax);
+    MotorRight.begin(pwmThingConfigs[1].pinA, pwmThingConfigs[1].pinB, pwmThingConfigs[1].thingType, pwmThingConfigs[1].inverted,
+      pwmThingConfigs[1].servoMin, pwmThingConfigs[1].servoZero, pwmThingConfigs[1].servoMax);
+    Servo1.begin(pwmThingConfigs[2].pinA, pwmThingConfigs[2].pinB, pwmThingConfigs[2].thingType, pwmThingConfigs[2].inverted,
+      pwmThingConfigs[2].servoMin, pwmThingConfigs[2].servoZero, pwmThingConfigs[2].servoMax);
+    Servo2.begin(pwmThingConfigs[3].pinA, pwmThingConfigs[3].pinB, pwmThingConfigs[3].thingType, pwmThingConfigs[3].inverted,
+      pwmThingConfigs[3].servoMin, pwmThingConfigs[3].servoZero, pwmThingConfigs[3].servoMax);
+}
+
+void storePwmThingConfigs() {
+  char filename[30];
+  char buffer[256];
+  for(int i=0; i<numPwmThings; i++) {
+    snprintf(filename, sizeof(filename), "/%s.txt", pwmThingConfigs[i].name);
+    snprintf(buffer, sizeof(buffer), "%d,%d,%d,%d,%d,%d,%d\n", 
+      pwmThingConfigs[i].pinA, pwmThingConfigs[i].pinB, (int)pwmThingConfigs[i].thingType, (int)pwmThingConfigs[i].inverted,
+      pwmThingConfigs[i].servoMin, pwmThingConfigs[i].servoZero, pwmThingConfigs[i].servoMax);
+    writeFile(filename, buffer);
+  }
+}
+
+void loadPwmThingConfigs() {
+  char filename[30];
+  char buffer[256];
+  for(int i=0; i<numPwmThings; i++) {
+    snprintf(filename, sizeof(filename), "/%s.txt", pwmThingConfigs[i].name);
+    if(filesystem.exists(filename)) {
+      File file = filesystem.open(filename, "r");
+      if(file) {
+        size_t len = file.readBytes(buffer, sizeof(buffer)-1);
+        buffer[len] = '\0';
+        sscanf(buffer, "%d,%d,%d,%d,%d,%d,%d", 
+          &pwmThingConfigs[i].pinA, &pwmThingConfigs[i].pinB, (int*)&pwmThingConfigs[i].thingType, (int*)&pwmThingConfigs[i].inverted,
+          &pwmThingConfigs[i].servoMin, &pwmThingConfigs[i].servoZero, &pwmThingConfigs[i].servoMax);
+        file.close();
+      }
+    }
+  }
+}
 
 httpd_handle_t camera_httpd = NULL;
 httpd_handle_t stream_httpd = NULL;
@@ -123,11 +181,16 @@ char infotext[256] = "";
 
 static esp_err_t info_handler(httpd_req_t *req){
   static char info[2048];
-
-  snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u bytes, \r\nFree PSRAM: %u bytes, WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", 
-     infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram(), WiFi.RSSI(), fps, bps/1024);
-  snprintf(info + strlen(info), sizeof(info) - strlen(info), "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo\", E=\"E\" ", 
-     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL));
+  int info_len = 0;
+  // sprintf(infotext, "BSSID: %s, Camera: %s", WiFi.BSSIDstr().c_str(), info->name);
+  info_len = snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u bytes, Free PSRAM: %u bytes, \r\n", 
+     infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram());
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, Channel: %d, IP: %s \r\n", 
+     WiFi.SSID().c_str(), WiFi.BSSIDstr().c_str(), WiFi.channel(), WiFi.localIP().toString().c_str());
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", 
+     WiFi.RSSI(), fps, bps/1024);     
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo (%d)\", E=\"E\" ", 
+     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL), Servo1.getDuty());
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -168,7 +231,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         if (httpd_query_key_value(buf, query_keys[i], variable, sizeof(variable)) == ESP_OK) {
           key_values[i] = atoi(variable);
           res = 0;
-          //Serial.printf("Key: %s, Value: %d\n", query_keys[i], key_values[i]);
+          // Serial.printf("Key: %s, Value: %d\n", query_keys[i], key_values[i]);
         } 
       }
       if((httpd_query_key_value(buf, "wifi_ssid", strbuf, sizeof(strbuf)) == ESP_OK) && 
@@ -186,6 +249,66 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         } else {
           httpd_resp_sendstr(req, "Failed to update WiFi credentials.");
         }
+      }
+      // get robot name
+      if((httpd_query_key_value(buf, "roboter_name", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        bool noerrors = true;  
+        uri_decode(strbuf, strbuf, sizeof(strbuf));
+        strlcpy(roboter_name, strbuf, sizeof(roboter_name));
+        if(!writeFile("/roboter_name.txt", roboter_name)) noerrors = false;
+        Serial.printf("Updated Roboter Name: %s\n", roboter_name);
+        if(noerrors) {
+          httpd_resp_sendstr(req, "Roboter name updated successfully.");
+        } else {
+          httpd_resp_sendstr(req, "Failed to update roboter name.");
+        }
+      }
+      if((httpd_query_key_value(buf, "pwmThingRead", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        Serial.printf("Read request for PwmThing index: %s\n", strbuf);
+        int index = atoi(strbuf);
+        if(index >= 0 && index < numPwmThings) {
+          char response[256];
+          snprintf(response, sizeof(response), "%s,%d,%d,%d,%d,%d,%d,%d", 
+            pwmThingConfigs[index].name, pwmThingConfigs[index].pinA, pwmThingConfigs[index].pinB, (int)pwmThingConfigs[index].thingType, (int)pwmThingConfigs[index].inverted,
+            pwmThingConfigs[index].servoMin, pwmThingConfigs[index].servoZero, pwmThingConfigs[index].servoMax);
+          httpd_resp_set_type(req, "text/plain");
+          httpd_resp_send(req, response, strlen(response));
+          free(buf);
+          return ESP_OK;
+        } 
+      }
+      if((httpd_query_key_value(buf, "pwmThingWrite", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        Serial.printf("Write request for PwmThing index: %s\n", strbuf);
+        int values[8]; char name[20]; int index = -1;
+        if(sscanf(strbuf, "%d,%19[^,],%d,%d,%d,%d,%d,%d,%d", &index, name, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7]) == 9) {
+          if((index >= 0 && index < numPwmThings) && (strlen(name) > 0)) {
+            //strlcpy(pwmThingConfigs[index].name, name, sizeof(pwmThingConfigs[index].name));
+            pwmThingConfigs[index].pinA = values[1];
+            pwmThingConfigs[index].pinB = values[2];
+            pwmThingConfigs[index].thingType = (PwmThing::ThingType)values[3];
+            pwmThingConfigs[index].inverted = (bool)values[4];
+            pwmThingConfigs[index].servoMin = values[5];
+            pwmThingConfigs[index].servoZero = values[6];
+            pwmThingConfigs[index].servoMax = values[7];
+            Serial.printf("Updated PwmThing index %d: Name=%s, pinA=%d, pinB=%d, thingType=%d, inverted=%d, servoMin=%d, servoZero=%d, servoMax=%d\n", 
+              index, pwmThingConfigs[index].name, pwmThingConfigs[index].pinA, pwmThingConfigs[index].pinB, (int)pwmThingConfigs[index].thingType, (int)pwmThingConfigs[index].inverted,
+              pwmThingConfigs[index].servoMin, pwmThingConfigs[index].servoZero, pwmThingConfigs[index].servoMax);
+          }
+          initPwmThings();  
+          storePwmThingConfigs(); // Store default configs if not already stored
+        }
+        res = 0;
+      }
+      if((httpd_query_key_value(buf, "reconnect", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        Serial.println("WiFi reconnect requested");
+        httpd_resp_sendstr(req, "ok reconnecting triggered...");
+        WiFi.disconnect();
+        WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);      
+        WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);  
+        //WiFi.reconnect();
+        wifiMulti.run();
+        free(buf);
+        return ESP_OK;
       }
     } else {
       free(buf);
@@ -219,7 +342,11 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
   //analogWrite(WHITE_LED_PIN, constrain(c * 255, 0, 255)); // LED brightness control
   if(c > 0) {
-    WhiteLED.set(constrain(c * 255, 0, 255));
+    int wval = constrain(c * 255, 0, 255);
+    if(WhiteLedMaxOnTimeMs <= 0) {
+      if(wval > WhiteLedTimeoutThresholdValue) wval = WhiteLedTimeoutThresholdValue; // Limit LED to threshold value to prevent overheating
+    }
+    WhiteLED.set(wval);
     RedLED.set(0);
   } else {
     WhiteLED.set(0);
@@ -316,13 +443,13 @@ void setup() {
   readFile("/wifi_password.txt", wifi_password, sizeof(wifi_password));
   Serial.printf("Loaded config: Name=%s, SSID=%s, Password=%s\n", roboter_name, wifi_ssid, wifi_password);
 
-  MotorLeft.begin(MOTOR_2_PIN_1, MOTOR_2_PIN_2, PwmThing::halfBridgeIdleHigh, true);
-  MotorRight.begin(MOTOR_1_PIN_1, MOTOR_1_PIN_2, PwmThing::halfBridgeIdleHigh, true);
-  Servo1.begin(SERVO_1_PIN, -1, PwmThing::servoMotor);
-
- // MotorLeft.begin(12, -1, PwmThing::servoMotor0Stop, false);
- // MotorRight.begin(13, -1, PwmThing::servoMotor0Stop, true);
- // Servo1.begin(15, -1, PwmThing::servoMotor, false);
+//  MotorLeft.begin(MOTOR_2_PIN_1, MOTOR_2_PIN_2, PwmThing::halfBridgeIdleHigh, true);
+//  MotorRight.begin(MOTOR_1_PIN_1, MOTOR_1_PIN_2, PwmThing::halfBridgeIdleHigh, true);
+//  Servo1.begin(SERVO_1_PIN, -1, PwmThing::servoMotor);
+  
+  loadPwmThingConfigs();
+  initPwmThings();  
+  storePwmThingConfigs(); // Store default configs if not already stored
 
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -381,6 +508,7 @@ void setup() {
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(roboter_name); 
   WiFi.mode(WIFI_STA);
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
   WiFi.setAutoReconnect(true);
   wifiMulti.addAP(wifi_ssid, wifi_password);
   WhiteLED.set(32); // LED on
@@ -389,6 +517,7 @@ void setup() {
   if(wifiMulti.run() != WL_CONNECTED) {
     Serial.println("Failed to connect to WiFi, opening AP mode.");
     RedLED.set(255); // Red LED on to indicate WiFi connection failure
+    wifiMulti.APlistClean(); WiFi.disconnect(true, true);
     WiFi.AP.begin();
     WiFi.AP.create(roboter_name);
     WiFi.AP.enableDhcpCaptivePortal();
@@ -439,11 +568,51 @@ void setup() {
   Serial.print("Name: ");
   Serial.println(info->name);
 
-  sprintf(infotext, "BSSID: %s, Camera: %s", WiFi.BSSIDstr().c_str(), info->name);
+  sprintf(infotext, "Camera: %s", info->name);
 
   WhiteLED.printInfo();
   WhiteLED.set(28);
 
+}
+
+void processSerial() {
+  const int bufferSize = 128;
+  static char inputBuffer[bufferSize];
+  static int bufferIndex = 0;
+  char c;
+  if(Serial.available()) {
+    c = Serial.read();
+    if(c == '\r') return; // Ignore carriage return
+    if(c >= 32) {
+      inputBuffer[bufferIndex] = c;
+      if(bufferIndex < (bufferSize - 2)) { // Leave space for null terminator
+        bufferIndex++;
+      }
+    }
+    if((c == 8) && (bufferIndex > 0)) { // Handle backspace
+      bufferIndex--;
+    }
+    if(c == '\n') {
+      inputBuffer[bufferIndex] = '\0'; // Null-terminate the string
+      Serial.printf("Received command: %s\n", inputBuffer);
+      if(strncmp(inputBuffer, "name ", 5) == 0) {
+        strlcpy(roboter_name, inputBuffer + 5, sizeof(roboter_name));
+        writeFile("/roboter_name.txt", roboter_name);
+        Serial.printf("Updated name to: %s\n", roboter_name);
+      } else if(strncmp(inputBuffer, "ssid ", 5) == 0) {
+        strlcpy(wifi_ssid, inputBuffer + 5, sizeof(wifi_ssid));
+        writeFile("/wifi_ssid.txt", wifi_ssid);
+        Serial.printf("Updated WiFi SSID to: %s\n", wifi_ssid);
+      } else if(strncmp(inputBuffer, "password ", 9) == 0) {
+        strlcpy(wifi_password, inputBuffer + 9, sizeof(wifi_password));
+        writeFile("/wifi_password.txt", wifi_password);
+        Serial.printf("Updated WiFi password to: %s\n", wifi_password);
+      } else {
+        Serial.println("Unknown command. Use 'name <newname>', 'ssid <newssid>' or 'password <newpassword>'.");
+      }
+      bufferIndex = 0; // Reset buffer index for next command
+    } 
+  }
 }
 
 void loop() {
@@ -461,5 +630,8 @@ void loop() {
     }
   } 
 
+  processSerial(); // Check for serial commands 
+
   delay(10);
 }
+

@@ -19,13 +19,16 @@ public:
     };
 
     // Method to initialize the PwmThing
-    void begin(int pinA, int pinB = -1, ThingType thingType = pwmOut, bool inverted = false);
+    void begin(int pinA, int pinB = -1, ThingType thingType = pwmOut, bool inverted = false, 
+      int servoMin = 768, int servoZero = 4760, int servoMax = 9544);
 
     // Method to set the value
     void set(int value);
 
     // Method to get latest set value
     int get() { return lastValue; }
+
+    int getDuty() { return lastDuty; }
 
     void printInfo();
 
@@ -34,13 +37,14 @@ public:
     int pinB;
     ThingType thingType;
     bool inverted;
-    int lastValue; 
+    
     int servoMin = 768;
     int servoZero = 4760;
     int servoMax = 9544;
 
     bool logValues = false;
-    
+    int lastValue;
+    int lastDuty;
 };
 
 #endif // PWMTHING_H

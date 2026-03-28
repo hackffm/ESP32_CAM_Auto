@@ -49,11 +49,24 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     input[type=range] { flex: 1; height: 35px; }
     .slider-value { min-width: 45px; font-weight: bold; color: #9b8bf3; }
 
+    .mein-button { padding: 10px 20px; font-size: 24px; border: none; border-radius: 6px;
+       background-color: #007bff; color: rgb(12, 112, 133); cursor: pointer; transition: background-color 0.2s;
+    }
+
     /* gpds = Gamepad selector styles */
     .gpds_row { display: flex; gap: 8px; 
       align-items: center; justify-content: center; flex-wrap: wrap; }
     /* select, input { font-size: 12px; } */
     .gpds_axes { margin-top: 5px; font-family: monospace; }
+
+    .pt_row { display: flex; gap: 6px; align-items: center; justify-content: center; flex-wrap: wrap; margin-bottom: 4px; }
+    input, select { font-size: 12px; padding: 2px;}
+    input[type="text"] { width: 90px; }
+    input[type="number"] { width: 55px; }
+    .pt_header { font-weight: bold; margin-top: 10px; }
+    .pt_container { border: 1px solid #ccc; padding: 6px; margin-bottom: 6px; }
+    button { padding: 4px 8px; font-size: 12px; }
+
   </style>
 </head>
 <body>
@@ -84,17 +97,56 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   </div>  
   <div class="gpds_row">
     X Axis:
-    <select id="gpdsel_xAxis"></select>
+    <select id="gpdsel_xAxis">
+      <option value="0" selected>0</option><option value="1">1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option><option value="5">5</option>
+    </select>
     <label><input type="checkbox" id="gpdsel_invertX">Invert</label>
 
     Y Axis:
-    <select id="gpdsel_yAxis"></select>
+    <select id="gpdsel_yAxis">      
+      <option value="0">0</option><option value="1" selected>1</option><option value="2">2</option>
+      <option value="3">3</option><option value="4">4</option><option value="5">5</option></select>
     <label><input type="checkbox" id="gpdsel_invertY">Invert</label>
 
     <span>X: <span id="gpdsel_xVal">0.00</span></span>
     <span>Y: <span id="gpdsel_yVal">0.00</span></span>
   </div>
   <div class="gpds_axes" id="gpdsel_axesDisplay"></div>
+
+  <br><br>
+  <button id="btn-reconnect" class="btn-reconnect-css">WiFi reconnect</button>
+  <br><br>
+
+  <div class="gpds_row">
+    <form action="/action" method="GET">
+      <label for="roboter_name">Set Bot Name:</label>
+      <input type="text" id="roboter_name" name="roboter_name">
+      <input type="submit" value="Change Bot Name">
+    </form>
+  </div>
+
+    <br><br>
+
+  <div class="gpds_row">Configure WiFi:
+    <form action="/action" method="GET">
+      <label for="wifi_ssid">SSID:</label>
+      <input type="text" id="wifi_ssid" name="wifi_ssid">
+
+      <label for="wifi_password">Password:</label>
+      <input type="password" id="wifi_password" name="wifi_password">
+
+      <input type="submit" value="Save WiFi Credentials">
+    </form>
+  </div>
+
+  <br><br>
+
+  <div id="pt_configs"></div>
+  <div class="pt_row">
+    <button onclick="pt_retrievePwmThings()">Retrieve</button>
+    <button onclick="pt_storePwmThings()">Store</button>
+  </div>
 
   <br><br>
   <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC" alt="hackffm.de" />
@@ -118,6 +170,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     let stick = { x: 0, y: 0 }; // x: -LIMIT_RADIUS = left, +LIMIT_RADIUS = right; y: -LIMIT_RADIUS = up, +LIMIT_RADIUS = down
     let dragging = false;
     let lastSendTime = 0;
+    let roboter_name_set = false;
 
     let sliderValues = { A:0, B:0, C:0, D:0, E:0 };
 
@@ -312,6 +365,10 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         if (key === "Name") {
           titleElement.textContent = "HackFFM-Bot: "+value;
           document.title = "HackFFM-Bot: "+value;
+          if(!roboter_name_set) {
+            document.getElementById('roboter_name').value = value;
+            roboter_name_set = true;
+          }
         } else {
           const labelElement = document.getElementById("label"+key);
           if (labelElement)
@@ -411,6 +468,10 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   function gpdsel_populateGamepads() {
     const gamepads = navigator.getGamepads();
     gpdsel_gamepadSelect.innerHTML = '';
+    const optdefault = document.createElement('option');
+    optdefault.value = -1;
+    optdefault.textContent = "No Gamepad";
+    gpdsel_gamepadSelect.appendChild(optdefault);
     for (let i = 0; i < gamepads.length; i++) {
       if (gamepads[i]) {
         const opt = document.createElement('option');
@@ -419,6 +480,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         gpdsel_gamepadSelect.appendChild(opt);
       }
     }
+    /*
     let count = 6;
     gpdsel_xAxisSelect.innerHTML = '';
     gpdsel_yAxisSelect.innerHTML = '';
@@ -428,6 +490,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       gpdsel_xAxisSelect.add(optX);
       gpdsel_yAxisSelect.add(optY);
     }
+    */
   }
 
   function format_fix2(v) { return (Math.round(v * 100) / 100).toFixed(2); }
@@ -480,7 +543,113 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   window.addEventListener("gamepadconnected", gpdsel_populateGamepads);
   window.addEventListener("gamepaddisconnected", gpdsel_populateGamepads);
   gpdsel_populateGamepads();
-  setInterval(gpdsel_update, 100);
+  setInterval(gpdsel_update, 75);
+
+  const pt_COUNT = 4;
+
+  const pt_thingTypes = [
+    "pwmOut",
+    "pwmOutGamma",
+    "halfBridge",
+    "halfBridgeIdleHigh",
+    "servoMotor",
+    "servoMotor0Stop"
+  ];
+
+  // Create UI
+  function pt_createUI() {
+    const container = document.getElementById("pt_configs");
+
+    for (let i = 0; i < pt_COUNT; i++) {
+      const div = document.createElement("div");
+      div.className = "pt_container";
+          // <div class="pt_row pt_header">#${i}</div>
+      div.innerHTML = `
+        <div class="pt_row">
+          <span id="pt_name${i}"></span>
+          PinA <input id="pt_pinA${i}" type="number">
+          PinB <input id="pt_pinB${i}" type="number">
+
+          Type 
+          <select id="pt_type${i}">
+            ${pt_thingTypes.map((t, idx) => `<option value="${idx}">${t}</option>`).join("")}
+          </select>
+
+          Inv <input id="pt_inv${i}" type="checkbox">
+
+          Min <input id="pt_min${i}" type="number">
+          Zero <input id="pt_zero${i}" type="number">
+          Max <input id="pt_max${i}" type="number">
+        </div>
+      `;
+
+      container.appendChild(div);
+    }
+  }
+
+  // Parse CSV → UI
+  function pt_applyConfig(index, csv) {
+    const parts = csv.split(",");
+
+    if (parts.length < 8) return;
+
+    document.getElementById(`pt_name${index}`).textContent = parts[0];
+    document.getElementById(`pt_pinA${index}`).value = parts[1];
+    document.getElementById(`pt_pinB${index}`).value = parts[2];
+    document.getElementById(`pt_type${index}`).value = parts[3];
+    document.getElementById(`pt_inv${index}`).checked = Number(parts[4]) !== 0;
+    document.getElementById(`pt_min${index}`).value = parts[5];
+    document.getElementById(`pt_zero${index}`).value = parts[6];
+    document.getElementById(`pt_max${index}`).value = parts[7];
+  }
+
+  // UI → CSV
+  function pt_collectConfig(index) {
+    const name = document.getElementById(`pt_name${index}`).textContent;
+    const pinA = document.getElementById(`pt_pinA${index}`).value || 0;
+    const pinB = document.getElementById(`pt_pinB${index}`).value || 0;
+    const type = document.getElementById(`pt_type${index}`).value;
+    const inv = document.getElementById(`pt_inv${index}`).checked ? 1 : 0;
+    const min = document.getElementById(`pt_min${index}`).value || 0;
+    const zero = document.getElementById(`pt_zero${index}`).value || 0;
+    const max = document.getElementById(`pt_max${index}`).value || 0;
+
+    return [name, pinA, pinB, type, inv, min, zero, max].join(",");
+  }
+
+  // Retrieve all configs
+  async function pt_retrievePwmThings() {
+    for (let i = 0; i < pt_COUNT; i++) {
+      try {
+        const res = await fetch(`/action?pwmThingRead=${i}`);
+        const text = await res.text();
+        pt_applyConfig(i, text.trim());
+      } catch (e) {
+        console.warn("pt_retrieve failed for index", i, e);
+      }
+    }
+  }
+
+  // Store all configs
+  async function pt_storePwmThings() {
+    for (let i = 0; i < pt_COUNT; i++) {
+      const data = pt_collectConfig(i);
+      if(data.name === "") continue; // Skip empty configs
+      try {
+        await fetch(`/action?pwmThingWrite=${i},${data}`);
+      } catch (e) {
+        console.warn("pt_store failed for index", i, e);
+      }
+    }
+  }
+
+  // Init
+  pt_createUI();
+  //window.addEventListener("load", pt_retrievePwmThings);
+
+  document.getElementById('btn-reconnect').addEventListener('click', () => {
+    fetch('/action?reconnect=1', { method: 'GET', });
+  });
 
 </script>
 
