@@ -626,8 +626,8 @@
     }
   }
 
-  function setCookie(selectedGamePad) {
-    document.cookie = "gamepad="+selectedGamePad;
+  function setCookie(selectedGamePad) { //,gamepadBtnUp
+    document.cookie = "gamepad="+selectedGamePadl; //+",gamepadBtnUp="+gamepadBtnUp;
   }
 
   function getCookie(cname) {
@@ -889,6 +889,17 @@ if(cookie_gamepad_index>=0) {
   console.log(getCookie('gamepad'));
 }
 
+let cookie_gamepad_button_up_index = getCookie('gamepadBtnUp');
+if(cookie_gamepad_button_up_index>=0) {
+  // selectedGamepadIndex = cookie_gamepad_button_up_index;
+  console.log(getCookie('gamepadBtnUp'));
+}
+
+let cookie_gamepad_button_down_index = getCookie('gamepadBtnDown');
+if(cookie_gamepad_button_down_index>=0) {
+  // selectedGamepadIndex = cookie_gamepad_button_down_index;
+  console.log(getCookie('gamepadBtnDown'));
+}
 
 
 </script>

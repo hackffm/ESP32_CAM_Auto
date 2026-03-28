@@ -92,9 +92,25 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   <div class="sliders-wrapper" id="sliders"></div>
 
   <div class="gpds_row">
+    <button id="searchGamepad">Search gamepad</button>
+    <p id="output">No gamepad detected</p>
+  </div>
+
+  <div class="gpds_row">
+    <button id="searchGamepadServoUP">Set servo UP</button>
+    <p id="outputGamepadServoUP">No gamepad button set</p>
+  </div>
+
+  <div class="gpds_row">
+    <button id="searchGamepadServoDOWN">Set servo DOWN</button>
+    <p id="outputGamepadServoDOWN">No gamepad button set</p>
+  </div>
+
+  <div class="gpds_row">
     Gamepad:
     <select id="gpdsel_gamepadSelect"></select>
   </div>  
+
   <div class="gpds_row">
     X Axis:
     <select id="gpdsel_xAxis">
@@ -136,7 +152,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       <label for="wifi_password">Password:</label>
       <input type="password" id="wifi_password" name="wifi_password">
 
-      <input type="submit" value="Save WiFi Credentials">
+      <input type="submit" value="Save WiFi">
     </form>
   </div>
 
@@ -148,6 +164,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     <button onclick="pt_storePwmThings()">Store</button>
   </div>
 
+ 
+
   <br><br>
   <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC" alt="hackffm.de" />
   &copy; 2026 Hackerspace-FFM e.V.
@@ -155,11 +173,17 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 <script>
     /* ================= CONFIG ================= */
     const LIMIT_RADIUS = 150;
-    const DEADZONE_RADIUS = 40;
+    const DEADZONE_RADIUS = 0;
     const STICK_RADIUS = 25;
     const MAX_VALUE = 255;
     const UPDATE_INTERVAL = 50;
     let   STICK_COLOR = "rgba(255,165,0,0.3)";
+
+    const STICK_X_EXPO_FACTOR = 0.35;
+    const STICK_Y_EXPO_FACTOR = 0.7;
+
+    const SERVO_MIN = -100;
+    const SERVO_MAX = 100;
     /* ========================================== */
 
     const canvas = document.getElementById("joystick");
@@ -193,6 +217,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       input.min = -127;
       input.max = 127;
       input.value = 0;
+      input.dataset.for = letter;
 
       const value = document.createElement("div");
       value.className = "slider-value";
@@ -310,6 +335,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     }
 
     /* ============= AXIS CALCULATION ============= */
+    /*
     function calculateAxis(x, y) {
       const dist = Math.hypot(x, y);
       if (dist <= DEADZONE_RADIUS) return { x:0, y:0 };
@@ -321,6 +347,29 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         x: Math.round((x / dist) * scale * MAX_VALUE),
         y: Math.round((y / dist) * -scale * MAX_VALUE)
       };
+    }
+    */
+
+    function calculateAxis(x, y) {
+      // console.log({x2:x, y2:y});
+      //x = x * 0.35;
+      x = 150*expo(x/150,STICK_X_EXPO_FACTOR);
+      y = 150*expo(y/150,STICK_Y_EXPO_FACTOR);
+      const dist = Math.hypot(x, y);
+      if (dist <= DEADZONE_RADIUS) return { x:0, y:0 };
+
+      const scale = (dist - DEADZONE_RADIUS) /
+                    (LIMIT_RADIUS - DEADZONE_RADIUS);
+
+      return {
+        x: Math.round((x / dist) * scale * MAX_VALUE),
+        y: Math.round((y / dist) * -scale * MAX_VALUE)
+      };
+    }
+
+    function expo(val,factor) {
+      let res = Math.sin(val*(Math.PI/2))*factor;
+      return res;
     }
 
     /* ============= SEND DATA ============= */
@@ -343,6 +392,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       lastSendTime = now;
 
       const axis = calculateAxis(stick.x, stick.y);
+
+      
 
       fetch(`/action?x=${axis.x}&y=${axis.y}` +
             `&a=${sliderValues.A}` +
@@ -400,7 +451,10 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     let streamRetryDelay = 1000;
     function loadStream() { photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`; updateJoystickMode();}
 
-    photo.onload = () => { console.log("StreamOnLoed"); streamRetryDelay = 1000; };
+    photo.onload = () => { 
+      // console.log("StreamOnLoed"); 
+      streamRetryDelay = 1000; 
+    };
     photo.onerror = () => { 
       console.warn("Stream load error, retrying in " + streamRetryDelay + "ms");
       setTimeout(loadStream, streamRetryDelay); 
@@ -508,11 +562,47 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     gpdsel_activityTimeout = null;
   }
 
+  let lastGamepadButtons = null;
+  let lastGamePads = null;
+
+  let selectedGamepadIndex = null;
+
   function gpdsel_update() {
     const gamepads = navigator.getGamepads();
-    const gp = gamepads[gpdsel_gamepadSelect.value];
+    // const gp = gamepads[gpdsel_gamepadSelect.value];
+    const gp = gamepads[selectedGamepadIndex];
+
+
     if (!gp) return;
     const axes = gp.axes.slice(0, 6);
+    // console.log(gp.buttons);
+
+    // setCookie(gpdsel_gamepadSelect.value);
+
+    search_gamepad_output.textContent = `Gamepad: ${gp.id}`;
+    
+
+    if(lastGamepadButtons!=null) {
+      
+      for(let i=0; i<gp.buttons.length; i++){
+        if(gp.buttons[i].pressed) {
+          
+          if(servo_up_index==i && gp.buttons[i].pressed) {
+            sliderValues.D = -60;
+            console.log('up')
+          }
+          if(servo_down_index==i && gp.buttons[i].pressed) {
+            sliderValues.D = 50;
+            console.log('down')
+          }
+          sendData(true);
+        }
+      }
+    }
+    lastGamepadButtons = gp.buttons;
+
+    
+
     gpdsel_axesDisplay.textContent = axes
       .map((v, i) => `A${i}: ${format_fix2(v)}`)
       .join(' | ');
@@ -527,7 +617,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         clearTimeout(gpdsel_activityTimeout);
         gpdsel_activityTimeout = null;
       } 
-      console.log("Gamepad timeout set");
+      // console.log("Gamepad timeout set");
       gpdsel_activityTimeout = setTimeout(gpdsel_activityTimeoutFunction, 8000);
       STICK_COLOR = "rgba(255,0,165,0.3)";
     }
@@ -537,6 +627,28 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       sendData(true);
       drawJoystick();
     }
+  }
+
+  function setCookie(selectedGamePad) { //,gamepadBtnUp
+    document.cookie = "gamepad="+selectedGamePadl; //+",gamepadBtnUp="+gamepadBtnUp;
+  }
+
+  function getCookie(cname) {
+    let name = cname + "=";
+    let decodedCookie = decodeURIComponent(document.cookie);
+    let ca = decodedCookie.split(';');
+    console.log(document.cookie)
+    console.log(decodedCookie)
+    for(let i = 0; i <ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0) == ' ') {
+        c = c.substring(1);
+      }
+      if (c.indexOf(name) == 0) {
+        return c.substring(name.length, c.length);
+      }
+    }
+    return "";
   }
 
   // Gamepad init stuff
@@ -650,6 +762,148 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   document.getElementById('btn-reconnect').addEventListener('click', () => {
     fetch('/action?reconnect=1', { method: 'GET', });
   });
+
+
+
+const search_gamepad_button = document.getElementById("searchGamepad");
+const search_gamepad_output = document.getElementById("output");
+
+const search_gamepad_button_servo_up = document.getElementById("searchGamepadServoUP");
+const search_gamepad_output_servo_up = document.getElementById("outputGamepadServoUP");
+const search_gamepad_button_servo_down = document.getElementById("searchGamepadServoDOWN");
+const search_gamepad_output_servo_down = document.getElementById("outputGamepadServoDOWN");
+
+
+let searching = false;
+
+search_gamepad_button.addEventListener("click", () => {
+    if(!searching) {
+      lastGamepadButtons = null;
+      selectedGamepadIndex = null;
+      searching = true;
+      search_gamepad_output.textContent = "Press any button on your gamepad...";
+      requestAnimationFrame(checkGamepad);
+    } else {
+      searching = false; 
+      search_gamepad_output.textContent = "No gamepad selecte";
+    }
+});
+
+let searchingServoUP = false;
+let searchingServoDOWN = false;
+
+let servo_down_index = null;
+let servo_up_index = null;
+
+search_gamepad_button_servo_up.addEventListener("click", () => {
+    if(!searchingServoUP) {
+      searchingServoUP = true;
+      search_gamepad_output_servo_up.textContent = "Press a button on your gamepad...";
+      requestAnimationFrame(checkGamepadServoUP);
+    } else {
+      searchingServoUP = false; 
+      search_gamepad_output_servo_up.textContent = "No button selecte";
+    }
+});
+
+search_gamepad_button_servo_down.addEventListener("click", () => {
+    if(!searchingServoDOWN) {
+      searchingServoDOWN = true;
+      search_gamepad_output_servo_down.textContent = "Press a button on your gamepad...";
+      requestAnimationFrame(checkGamepadServoDOWN);
+    } else {
+      searchingServoDOWN = false; 
+      search_gamepad_output_servo_down.textContent = "No button selecte";
+    }
+});
+
+function checkGamepad() {
+    if (!searching) return;
+
+    const gamepads = navigator.getGamepads();
+
+    for (let i = 0; i < gamepads.length; i++) {
+        const gp = gamepads[i];
+        if (!gp) continue;
+
+        // Check if any button is pressed
+        for (let j = 0; j < gp.buttons.length; j++) {
+            if (gp.buttons[j].pressed) {
+                searching = false;
+
+                search_gamepad_output.textContent = `Gamepad detected: ${gp.id}`;
+                console.log("Gamepad ID:", gp.id);
+
+                selectedGamepadIndex = i;
+
+                setCookie(selectedGamepadIndex);
+
+                return;
+            }
+        }
+    }
+
+    // Keep checking
+    requestAnimationFrame(checkGamepad);
+}
+
+function checkGamepadServoUP() {
+    if (!searchingServoUP) return;
+    const gamepads = navigator.getGamepads();
+      const gp = gamepads[selectedGamepadIndex];
+      if (!gp) return;
+
+      // Check if any button is pressed
+      for (let j = 0; j < gp.buttons.length; j++) {
+          if (gp.buttons[j].pressed) {
+              searchingServoUP = false;
+              servo_up_index = j;
+              search_gamepad_output_servo_up.textContent = `Gamepad detected: ${j}`;
+              return;
+          }
+      }
+  
+    requestAnimationFrame(checkGamepadServoUP);
+}
+
+function checkGamepadServoDOWN() {
+    if (!searchingServoDOWN) return;
+    const gamepads = navigator.getGamepads();
+      const gp = gamepads[selectedGamepadIndex];
+      if (!gp) return;
+
+      // Check if any button is pressed
+      for (let j = 0; j < gp.buttons.length; j++) {
+          if (gp.buttons[j].pressed) {
+              searchingServoDOWN = false;
+              servo_down_index = j;
+              search_gamepad_output_servo_down.textContent = `Gamepad detected: ${j}`;
+              return;
+          }
+      }
+  
+    requestAnimationFrame(checkGamepadServoDOWN);
+}
+
+let cookie_gamepad_index = getCookie('gamepad');
+
+if(cookie_gamepad_index>=0) {
+  selectedGamepadIndex = cookie_gamepad_index;
+  console.log(getCookie('gamepad'));
+}
+
+let cookie_gamepad_button_up_index = getCookie('gamepadBtnUp');
+if(cookie_gamepad_button_up_index>=0) {
+  // selectedGamepadIndex = cookie_gamepad_button_up_index;
+  console.log(getCookie('gamepadBtnUp'));
+}
+
+let cookie_gamepad_button_down_index = getCookie('gamepadBtnDown');
+if(cookie_gamepad_button_down_index>=0) {
+  // selectedGamepadIndex = cookie_gamepad_button_down_index;
+  console.log(getCookie('gamepadBtnDown'));
+}
+
 
 </script>
 
