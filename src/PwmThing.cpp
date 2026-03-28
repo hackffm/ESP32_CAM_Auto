@@ -5,12 +5,15 @@
 PwmThing::PwmThing() : pinA(-1), pinB(-1), thingType(pwmOut), inverted(false), lastValue(0) {}
 
 // Method to initialize the PwmThing
-void PwmThing::begin(int pinA, int pinB, ThingType thingType, bool inverted) {
+void PwmThing::begin(int pinA, int pinB, ThingType thingType, bool inverted, int servoMin, int servoZero, int servoMax) {
   this->pinA = pinA;
   this->pinB = pinB;
   this->thingType = thingType;
   this->inverted = inverted;
   this->lastValue = -1111;
+  this->servoMin = servoMin;
+  this->servoZero = servoZero;
+  this->servoMax = servoMax;
 
   // Configure pins
   if (pinA >= 0) {
@@ -73,6 +76,7 @@ void PwmThing::set(int value) {
   if(value == lastValue) return; // No change, skip
   value = constrain(value, -255, 255); // Constrain value to valid range
   lastValue = value;
+  lastDuty = 0;
   int duty;
   if(logValues) Serial.printf("Pin %d = %d", pinA, value);
 
@@ -95,6 +99,7 @@ void PwmThing::set(int value) {
           analogWrite(pinB, value);
       }
       if(logValues) Serial.printf(", pwmOut %d\n", value);
+      lastDuty = value;
       break;
 
     case halfBridge:
@@ -111,6 +116,7 @@ void PwmThing::set(int value) {
         analogWrite(pinA, phaseA);
         analogWrite(pinB, phaseB);
         if(logValues) Serial.printf(", phaseA %d, phaseB %d\n", phaseA, phaseB);
+        lastDuty = min(phaseA, phaseB);
       }
       break;   
 
@@ -126,6 +132,7 @@ void PwmThing::set(int value) {
       if (pinA >= 0) analogWrite(pinA, duty);
       if (pinB >= 0) analogWrite(pinB, duty);
       if(logValues) Serial.printf(", servo duty %d\n", duty);
+      lastDuty = duty;
       break;
 
     default:
