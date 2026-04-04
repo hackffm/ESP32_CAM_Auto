@@ -35,7 +35,7 @@
 #endif
 
 // Replace with your network credentials, will be overwritten by values stored in LittleFS if available
-char roboter_name[34] = "bot-tut2"; // only use a-z, 0-9 and - in the name 
+char roboter_name[34] = "cambot"; // only use a-z, 0-9 and - in the name 
 char wifi_ssid[34] = WIFI_SSID;  // "REPLACE_WITH_YOUR_SSID";
 char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
@@ -66,6 +66,8 @@ PwmThing MotorLeft, MotorRight, Servo1, Servo2, WhiteLED, RedLED;
 
 WiFiMulti wifiMulti;
 
+bool APMode = false;
+
 // Store data used in PwmThing.begin for Motors and Servos here in an array of a structto be stored in LittleFS and to be used on startup
 struct PwmThingConfig {
   char name[20]; int pinA; int pinB; PwmThing::ThingType thingType; bool inverted;
@@ -81,7 +83,7 @@ PwmThingConfig pwmThingConfigs[numPwmThings] = {
   {"Servo2", -1, -1, PwmThing::servoMotor, false, 768, 4760, 9544}
 };
 
-
+uint32_t lastMotorCommandTime = 0;
 
 #define CAMERA_MODEL_AI_THINKER
 //#define CAMERA_MODEL_M5STACK_PSRAM
@@ -102,6 +104,15 @@ int      WhiteLedTimeoutThresholdValue = 44; // Count down MaxOnTimeMs above thi
 fs::FS &filesystem = LittleFS;
 
 void initPwmThings() {
+    // Disable UART RX if pinA or pinB is using GPIO3
+    if(pwmThingConfigs[0].pinA == 3 || pwmThingConfigs[0].pinB == 3 || 
+       pwmThingConfigs[1].pinA == 3 || pwmThingConfigs[1].pinB == 3 || 
+       pwmThingConfigs[2].pinA == 3 || pwmThingConfigs[2].pinB == 3 || 
+       pwmThingConfigs[3].pinA == 3 || pwmThingConfigs[3].pinB == 3) {
+      Serial.println("Disabling UART RX because GPIO3 is used for IO.");
+      Serial.end();
+      Serial.begin(115200, SERIAL_8N1, -1); // Disable RX pin by setting it to -1
+    }
     MotorLeft.begin(pwmThingConfigs[0].pinA, pwmThingConfigs[0].pinB, pwmThingConfigs[0].thingType, pwmThingConfigs[0].inverted, 
       pwmThingConfigs[0].servoMin, pwmThingConfigs[0].servoZero, pwmThingConfigs[0].servoMax);
     MotorRight.begin(pwmThingConfigs[1].pinA, pwmThingConfigs[1].pinB, pwmThingConfigs[1].thingType, pwmThingConfigs[1].inverted,
@@ -187,10 +198,11 @@ static esp_err_t info_handler(httpd_req_t *req){
      infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram());
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, Channel: %d, IP: %s \r\n", 
      WiFi.SSID().c_str(), WiFi.BSSIDstr().c_str(), WiFi.channel(), WiFi.localIP().toString().c_str());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d ", 
-     WiFi.RSSI(), fps, bps/1024);     
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo (%d)\", E=\"E\" ", 
-     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL), Servo1.getDuty());
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d, Command/s: %d\r\n", 
+     WiFi.RSSI(), fps, bps/1024, cps);     
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", "
+     "B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo1 (%d)\", E=\"Servo2 (%d)\"", 
+     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL), Servo1.getDuty(), Servo2.getDuty());
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -214,6 +226,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   int res = -1;
   char strbuf[120] = {0,};
   char strbuf2[120] = {0,};
+  cps_count++; // Count commands per second for performance monitoring
 
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
@@ -250,7 +263,6 @@ static esp_err_t cmd_handler(httpd_req_t *req){
           httpd_resp_sendstr(req, "Failed to update WiFi credentials.");
         }
       }
-      // get robot name
       if((httpd_query_key_value(buf, "roboter_name", strbuf, sizeof(strbuf)) == ESP_OK)) {
         bool noerrors = true;  
         uri_decode(strbuf, strbuf, sizeof(strbuf));
@@ -281,7 +293,8 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         Serial.printf("Write request for PwmThing index: %s\n", strbuf);
         int values[8]; char name[20]; int index = -1;
         if(sscanf(strbuf, "%d,%19[^,],%d,%d,%d,%d,%d,%d,%d", &index, name, &values[1], &values[2], &values[3], &values[4], &values[5], &values[6], &values[7]) == 9) {
-          if((index >= 0 && index < numPwmThings) && (strlen(name) > 0)) {
+          if((index >= 0 && index < numPwmThings) && (strlen(name) > 0) && isUsablePin(values[1]) 
+            && isUsablePin(values[2]) && (values[3] >= 0) && (values[3] < PwmThing::thingTypeCount)) {
             //strlcpy(pwmThingConfigs[index].name, name, sizeof(pwmThingConfigs[index].name));
             pwmThingConfigs[index].pinA = values[1];
             pwmThingConfigs[index].pinB = values[2];
@@ -310,6 +323,14 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         free(buf);
         return ESP_OK;
       }
+      if((httpd_query_key_value(buf, "restart", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        Serial.println("Restart requested");
+        httpd_resp_sendstr(req, "ok restarting triggered...");
+        delay(100);
+        free(buf);
+        ESP.restart();
+        return ESP_OK;
+      }
     } else {
       free(buf);
       httpd_resp_send_404(req);
@@ -328,19 +349,17 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   MotorRight.set(y - x); 
 
   Servo1.set(key_values[5]*2);
+  Servo2.set(key_values[6]*2);
+  lastMotorCommandTime = millis();
 
   float a = key_values[2]/127.0; // Convert to -1.0 to 1.0
   float b = key_values[3]/127.0; // Convert to -1.0 to 1.0
   float c = key_values[4]/127.0; // Convert to -1.0 to 1.0
   float d = key_values[5]/127.0; // Convert to -1.0 to 1.0
   float e = key_values[6]/127.0; // Convert to -1.0 to 1.0
- 
- 
-  //servo1_target = mapFloat(d, -1.0, 1.0, 0, 180);
-  //analogWrite(SERVO_1_PIN, mapFloat(d, -1.0, 1.0, 192, 2386) );
 
   frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
-  //analogWrite(WHITE_LED_PIN, constrain(c * 255, 0, 255)); // LED brightness control
+
   if(c > 0) {
     int wval = constrain(c * 255, 0, 255);
     if(WhiteLedMaxOnTimeMs <= 0) {
@@ -352,7 +371,6 @@ static esp_err_t cmd_handler(httpd_req_t *req){
     WhiteLED.set(0);
     RedLED.set(constrain(c * -255, 0, 255));
   }
-  //analogWrite(RED_LED_PIN, constrain((1.0+c) * 255, 0, 255)); // LED brightness control
 
   quality = constrain(((1.0-b)/2.0)*63,4, 63);  // 0...63 lower=higher quality
   static int prev_quality = 10;
@@ -362,14 +380,10 @@ static esp_err_t cmd_handler(httpd_req_t *req){
     prev_quality = quality; 
   }
   
-
-
-
   if(res){
     return httpd_resp_send_500(req);
   }
 
-  
   return httpd_resp_send(req, NULL, 0);
 }
 
@@ -474,13 +488,15 @@ void setup() {
   config.pixel_format = PIXFORMAT_JPEG;     
   config.frame_size = FRAMESIZE_VGA;
   config.jpeg_quality = 30;
-  config.fb_count = 3;
+  config.fb_count = 2;
   
   if(!psramFound()){
     config.fb_location = CAMERA_FB_IN_DRAM;
     config.frame_size = FRAMESIZE_VGA;
     config.jpeg_quality = 30;
     config.fb_count = 1;
+  } else {
+  //  heap_caps_malloc_extmem_enable(30000);
   }
   
   // Camera init
@@ -517,10 +533,11 @@ void setup() {
   if(wifiMulti.run() != WL_CONNECTED) {
     Serial.println("Failed to connect to WiFi, opening AP mode.");
     RedLED.set(255); // Red LED on to indicate WiFi connection failure
-    wifiMulti.APlistClean(); WiFi.disconnect(true, true);
+    wifiMulti.APlistClean(); WiFi.disconnect(true, true); delay(1000); 
     WiFi.AP.begin();
     WiFi.AP.create(roboter_name);
     WiFi.AP.enableDhcpCaptivePortal();
+    APMode = true;
 
     // by default DNSServer is started serving any "*" domain name. It will reply
     // AccessPoint's IP to all DNS request (this is required for Captive Portal detection)
@@ -553,6 +570,7 @@ void setup() {
     ArduinoOTA.begin();  
   #endif
 
+  if(WiFi.SSID() != "HACKFFM.DE") WhiteLedTimeoutThresholdValue = 1044; // Low light limit only for Hackerspace...
 
   // Start streaming web server
   startCameraServer();
@@ -572,6 +590,8 @@ void setup() {
 
   WhiteLED.printInfo();
   WhiteLED.set(28);
+  Serial.println("You can change the name, WiFi SSID, or password using serial commands.");
+  Serial.println("Use 'name <newname>', 'ssid <newssid>' or 'password <newpassword>'.");
 
 }
 
@@ -581,7 +601,7 @@ void processSerial() {
   static int bufferIndex = 0;
   char c;
   if(Serial.available()) {
-    c = Serial.read();
+    c = Serial.read(); Serial.print(c); // Echo back to serial monitor
     if(c == '\r') return; // Ignore carriage return
     if(c >= 32) {
       inputBuffer[bufferIndex] = c;
@@ -607,6 +627,10 @@ void processSerial() {
         strlcpy(wifi_password, inputBuffer + 9, sizeof(wifi_password));
         writeFile("/wifi_password.txt", wifi_password);
         Serial.printf("Updated WiFi password to: %s\n", wifi_password);
+      } else if(strncmp(inputBuffer, "reboot", 6) == 0) {
+        Serial.println("Rebooting...");
+        delay(100);
+        ESP.restart();
       } else {
         Serial.println("Unknown command. Use 'name <newname>', 'ssid <newssid>' or 'password <newpassword>'.");
       }
@@ -628,9 +652,20 @@ void loop() {
     } else {
       WhiteLED.set(WhiteLedTimeoutThresholdValue); // Limit LED to threshold value to prevent overheating
     }
-  } 
+  } else if(WhiteLedMaxOnTimeMs < 30000) {
+    WhiteLedMaxOnTimeMs += 1; // Count up timer when LED is off or low
+  }
+
+  if(lastMotorCommandTime > 0 && (millis() - lastMotorCommandTime > 5000)) {
+    MotorLeft.set(0);
+    MotorRight.set(0);
+    lastMotorCommandTime = 0;
+    Serial.println("Motor command timeout, stopping motors");
+  }
 
   processSerial(); // Check for serial commands 
+
+  if(!APMode) wifiMulti.run(); // Keep WiFi connection alive, will reconnect if connection is lost
 
   delay(10);
 }

@@ -123,3 +123,15 @@ void listDir(const char *dirname, uint8_t levels) {
   Serial.printf("Total space: %d, used space: %d, free space: %d\r\n", t, u, t - u);
 }
 
+bool isUsablePin(int number) {
+    // these pins should be safe to use, avoid pin 1+3 as used for serial, avoid pin 4 as used for flash light
+    // pin 0 is camera clk, pin 16 is PSRAM CS - both can not be used!
+    // pin 33 is internal RedLED, pin 4 is WhiteLED, need extra wires if use need (and disable LED Things in code)
+    // Serial RX is disabled if GPIO3 is used
+    const int list[] = {-1, 2, 3, 12, 13, 14, 15 /* ,33 ,1 ,3, 4 */};
+    const int listSize = sizeof(list) / sizeof(list[0]);
+
+    // Check if the number is in the list
+    for (int i = 0; i < listSize; i++) if (list[i] == number) return true;
+    return false;
+}

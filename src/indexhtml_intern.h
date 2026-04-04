@@ -67,6 +67,12 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     .pt_container { border: 1px solid #ccc; padding: 6px; margin-bottom: 6px; }
     button { padding: 4px 8px; font-size: 12px; }
 
+    a:link {text-decoration: none; color: #f0ad5e; }
+    a:visited {text-decoration: none; color: #f0ad5e; }
+    a:hover {text-decoration: underline; }
+    a:active {text-decoration: underline; }
+
+
   </style>
 </head>
 <body>
@@ -132,6 +138,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 
   <br><br>
   <button id="btn-reconnect" class="btn-reconnect-css">WiFi reconnect</button>
+  <button id="btn-restart" class="btn-reconnect-css">Restart</button>
   <br><br>
 
   <div class="gpds_row">
@@ -158,6 +165,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 
   <br><br>
 
+  Motor and Servo pin configuration (click retrieve before changing)
   <div id="pt_configs"></div>
   <div class="pt_row">
     <button onclick="pt_retrievePwmThings()">Retrieve</button>
@@ -166,9 +174,12 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
 
  
 
-  <br><br>
-  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC" alt="hackffm.de" />
-  &copy; 2026 Hackerspace-FFM e.V.
+  <div class="gpds_row">
+  <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC"
+   alt="hackffm.de" style="float:left;width:51px;height:63px;"/><br>ESP32_CAM_Auto V1.00 on
+  <a href="https://github.com/hackffm/ESP32_CAM_Auto">GitHub</a><br>|
+  <a href="https://www.hackerspace-ffm.de/wiki/index.php?title=FPV-Roboter">&copy; 2026 Hackerspace-FFM e.V.</a>
+  </div>
 
 <script>
     /* ================= CONFIG ================= */
@@ -762,7 +773,9 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   document.getElementById('btn-reconnect').addEventListener('click', () => {
     fetch('/action?reconnect=1', { method: 'GET', });
   });
-
+  document.getElementById('btn-restart').addEventListener('click', () => {
+    fetch('/action?restart=1', { method: 'GET', });
+  });
 
 
 const search_gamepad_button = document.getElementById("searchGamepad");

@@ -7,6 +7,7 @@ static const char* _STREAM_PART = "\r\n--" PART_BOUNDARY "\r\n" "Content-Type: i
 int quality = 20;
 int fps = 0; int fps_count = 0; 
 int bps = 0; int bps_count = 0;
+int cps = 0; int cps_count = 0;
 uint32_t last_fps_time = 0; // checked in main_loop
 uint32_t last_frame_time = 0; // checked in main_loop
 uint32_t frame_limit_ms = 50; // default to 20 fps, can be set from web interface
@@ -17,6 +18,7 @@ void calc_fps() {
   if (now - last_fps_time >= 1000) {
     fps = fps_count; fps_count = 0;
     bps = bps_count; bps_count = 0;
+    cps = cps_count; cps_count = 0;
     last_fps_time = now;
     //Serial.printf("FPS: %d, BPS: %d\n", fps, bps);
     sensor_t * s = esp_camera_sensor_get();

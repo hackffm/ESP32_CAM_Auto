@@ -20,3 +20,5 @@ bool writeFile(const char *path, const char *data);
 size_t readFile(const char *path, char *buffer, size_t bufferSize);
 
 void listDir(const char *dirname, uint8_t levels);
+
+bool isUsablePin(int number);
