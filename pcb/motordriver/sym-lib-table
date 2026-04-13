@@ -1,0 +1,5 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "_for_motordriver") (type "KiCad") (uri "${KIPRJMOD}/_for_motordriver.kicad_sym") (options "") (descr ""))
+	(lib (name "_for_motordriver_import") (type "KiCad") (uri "${KIPRJMOD}/_for_motordriver.pretty") (options "") (descr ""))
+)
