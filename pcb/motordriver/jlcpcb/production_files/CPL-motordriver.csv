@@ -1,0 +1,23 @@
+Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
+C1,2.2uF,C_0805_2012Metric,129.4132,-113.5534,-90.0,top
+C2,0.01uF,C_0603_1608Metric,129.1592,-116.8526,-90.0,top
+C3,22uF,C_1206_3216Metric,124.8666,-110.4902,0.0,top
+C4,22uF,C_1206_3216Metric,131.6466,-120.3962,0.0,top
+C5,22uF,C_1206_3216Metric,103.507,-120.3708,180.0,top
+C6,22uF,C_1206_3216Metric,145.0578,-119.812,0.0,top
+H1,~,Hole_Tooling_JLCPCB,101.5,-101.5,0.0,top
+H2,~,Hole_Tooling_JLCPCB,101.5,-123.5,0.0,top
+H3,~,Hole_Tooling_JLCPCB,147.5,-101.5,0.0,top
+J1,USB_C_Receptacle_PowerOnly_6P,USB_C_Receptacle_HRO_TYPE-C-31-M-17,124.5,-105.165,0.0,top
+J2,Conn_01x08_Pin,PinSocket_1x08_P2.54mm_Vertical,136.0,-110.89,180.0,top
+J3,Conn_01x08_Pin,PinSocket_1x08_P2.54mm_Vertical,113.0,-110.89,0.0,top
+J4,Conn_02x03_Odd_Even,PinHeader_2x03_P2.54mm_Horizontal,105.0,-115.33,90.0,top
+J5,Conn_02x03_Odd_Even,PinHeader_2x03_P2.54mm_Horizontal,144.094,-115.328,90.0,top
+R1,0.22R,R_1206_3216Metric,119.9644,-110.4902,180.0,top
+R2,0.22R,R_1206_3216Metric,116.256,-113.5636,-90.0,top
+R3,0.22R,R_1206_3216Metric,116.256,-118.4404,90.0,top
+R4,0.22R,R_1206_3216Metric,140.2443,-119.812,0.0,top
+R5,0.22R,R_1206_3216Metric,108.2804,-120.3708,0.0,top
+R6,5k1,R_0603_1608Metric,116.0,-104.25,90.0,top
+R7,5k1,R_0603_1608Metric,117.75,-103.5,90.0,top
+U2,DRV8833PWP,HTSSOP-16-1EP_4.4x5mm_P0.65mm_EP3.4x5mm_Mask2.46x2.31mm_ThermalVias,124.114,-115.98,270.0,top

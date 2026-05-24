@@ -8,3 +8,4 @@
 **/.DS_Store
 **/._.DS_Store
 data/wifi_*
+ignore/*

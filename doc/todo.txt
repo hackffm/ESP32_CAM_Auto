@@ -1,0 +1,23 @@
+
+Webseite:
+  - SSID (Wlan-Name hinterschreiben weil leute SSID nicht wissen)
+  - Übernamhme der Daten mit Reboot wurde nicht verstanden 
+    - wie drücken oder ab- neu anstecken
+  - Servo-Button ins Bild
+  - Controller Settings speichern (im Browser speichern)
+  - Manuelle Controller Auswahl broken
+  - 7fps muss weg 
+
+Anleitung:
+  - Wie Wifi Einstellungen prüfen (Verbindung geht oder noch im AP Modus)
+  - Hinweis das Wifi-Passwort aufs Handy zu übertragen bevor auf den Bot-AP gewechselt wird
+  - 5Ghz only geht nicht  
+  
+Wifi:
+  - Captive Portal Seite ging nicht (WLED checken)
+  - Erkannte APs zur Auswahl anzeigen
+
+Auto-Power-Down nach Inaktivität
+
+
+
