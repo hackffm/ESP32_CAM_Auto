@@ -85,7 +85,7 @@ const int numPwmThings = 4;
 PwmThingConfig pwmThingConfigs[numPwmThings] = {
   {"MotorLeft", MOTOR_1_PIN_1, MOTOR_1_PIN_2, PwmThing::halfBridgeIdleHigh, false, 768, 4760, 9544},
   {"MotorRight", MOTOR_2_PIN_1, MOTOR_2_PIN_2, PwmThing::halfBridgeIdleHigh, false, 768, 4760, 9544},
-  {"Servo1", SERVO_1_PIN, -1, PwmThing::servoMotor0Stop, false, 768, 4760, 9544},
+  {"Servo1", SERVO_1_PIN, -1, PwmThing::servoMotor, false, 768, 4760, 9544},
   {"Servo2", -1, -1, PwmThing::servoMotor, false, 768, 4760, 9544}
 };
 
@@ -345,6 +345,18 @@ static esp_err_t cmd_handler(httpd_req_t *req){
           res = 0;
           // Serial.printf("Key: %s, Value: %d\n", query_keys[i], key_values[i]);
         } 
+      }
+      // query ml and mr for direct motor control
+      if((httpd_query_key_value(buf, "ml", strbuf, sizeof(strbuf)) == ESP_OK) && 
+         (httpd_query_key_value(buf, "mr", strbuf2, sizeof(strbuf2)) == ESP_OK)) {
+        int ml = atoi(strbuf);
+        int mr = atoi(strbuf2);
+        MotorLeft.set(ml);
+        MotorRight.set(mr);
+        lastMotorCommandTime = millis();
+        free(buf);
+        return httpd_resp_send(req, NULL, 0);
+        //Serial.printf("Motor command received - Left: %d, Right: %d\n", ml, mr);
       }
       if((httpd_query_key_value(buf, "wifi_ssid", strbuf, sizeof(strbuf)) == ESP_OK) && 
          (httpd_query_key_value(buf, "wifi_password", strbuf2, sizeof(strbuf2)) == ESP_OK)) {
