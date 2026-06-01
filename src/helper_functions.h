@@ -1,6 +1,11 @@
 // Collection of helper functions
 #include "Arduino.h"
 
+// usablePins must be defined otherwhere
+extern const int usablePins[];
+extern const size_t usablePinsCount; 
+extern const char availablePins[];
+
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh);
 
 // Helper: hex char (0-9a-f) to decimal value

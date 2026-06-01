@@ -7,6 +7,7 @@ Webseite:
   - Controller Settings speichern (im Browser speichern)
   - Manuelle Controller Auswahl broken
   - 7fps muss weg 
+  - Bild 180 drehen
 
 Anleitung:
   - Wie Wifi Einstellungen prüfen (Verbindung geht oder noch im AP Modus)
@@ -19,5 +20,9 @@ Wifi:
 
 Auto-Power-Down nach Inaktivität
 
+FW Update
 
+Extra Einstellungen:
+- Bild 180 drehen
+- 
 

@@ -1,16 +1,18 @@
 /*********
+ 
+   The MIT License (MIT) (but poisoned by GPL in the Face Library)
+   Hackerspace-FFM e.V. ESP32 CAM Robot with Web Interface
+   2026-06-02 Lutz Lisseck
+
+  Derived from this work: 
   Rui Santos & Sara Santos - Random Nerd Tutorials
   Complete instructions at https://RandomNerdTutorials.com/esp32-cam-projects-ebook/
   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files.
   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 *********/
 
-// GPIO12 Gelb
-// GPIO13 Grün
-// GPIO15 Braun
-// GPIO14 Violett
-// GPIO2  Grau
-// GPIO4  LED
+const char version_string[] = "V1.1 compiled on " __DATE__ " at " __TIME__;
+
 #define MOTOR_1_PIN_1    14
 #define MOTOR_1_PIN_2    15
 #define MOTOR_2_PIN_1    13
@@ -18,7 +20,6 @@
 #define SERVO_1_PIN       2
 #define WHITE_LED_PIN     4
 #define RED_LED_PIN      33
-//#define MOTOR_LOW_IDLE 1 // Check what gives better power to motor - with or without this flag
 
 // Wifi credentials are in a MyCreds.h file that must reside in /<HOME>/.platformio/lib/MyCreds/MyCreds.h
 // see attic/MyCreds.h for an example
@@ -61,12 +62,17 @@ char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #define ENABLE_OTA 
 int OTA_Status = 0; // 0=not enabled, 1=enabled, 2=in progress
 DNSServer dnsServer;
+bool APMode = false;
+
+IPAddress current_IP(192, 168, 4, 1);
+char      current_ssid[34] = ""; 
+int       current_rssi = -50;
 
 PwmThing MotorLeft, MotorRight, Servo1, Servo2, WhiteLED, RedLED;
 
 WiFiMulti wifiMulti;
 
-bool APMode = false;
+
 
 // Store data used in PwmThing.begin for Motors and Servos here in an array of a structto be stored in LittleFS and to be used on startup
 struct PwmThingConfig {
@@ -94,14 +100,86 @@ uint32_t lastMotorCommandTime = 0;
 #include "cam_pindefs.h"
 #include "cam_streamhandler.h"
 #include "indexhtml_intern.h"  // will be replaced if /data/index.html in LittleFS exists
+#include "settingshtml_intern.h"  // will be replaced if /data/settings.html in LittleFS exists
 
 #include "helper_functions.h"
 
-uint32_t WhiteLedMaxOnTimeMs = 30000; // Prevent LED overheating
+int32_t  WhiteLedMaxOnTimeMs = 30000; // Prevent LED overheating
 int      WhiteLedTimeoutThresholdValue = 44; // Count down MaxOnTimeMs above this threshold, limit LED to this threshold afterwards
 
+struct CameraConfig {
+  int rotation; // 0 = no rotation, 1 = 180° rotation
+  int size; // 0 = 320x240 (QVGA), 1 = 640x480 (VGA), 2 = 800x600 (SVGA), 3 = 1024x768 (XGA), 4 = 1280x1024 (SXGA), 5 = 1600x1200 (UXGA)
+  int fps; // Limit FPS, 0 = auto, 1...7 = 2,5,10,15,20,25,30 fps
+  int quality; // 0 = auto, 1 very poor (63), 2 poor (42), 3 medium (30), 4 good (18), 5 very good (6)
+} cameraConfig = {0, 1, 0, 0};
+// current values go to quality and frame_limit_ms in cam_streamhandler.h, they are updated from there when changed 
 
 fs::FS &filesystem = LittleFS;
+
+void setCameraToConfig() {
+  sensor_t * s = esp_camera_sensor_get();
+  framesize_t size2framesize[] = {FRAMESIZE_QVGA, FRAMESIZE_VGA, FRAMESIZE_SVGA, 
+    FRAMESIZE_XGA, FRAMESIZE_SXGA, FRAMESIZE_UXGA};
+  if(cameraConfig.size < 0 || cameraConfig.size > 5) cameraConfig.size = 1; // default to VGA if out of bounds  
+  s->set_framesize(s, size2framesize[cameraConfig.size]);
+  //s->set_quality(s, cameraConfig.quality);
+
+  int fps_values[] = {15, 2, 5, 10, 15, 20, 25, 30};
+  if(cameraConfig.fps < 0 || cameraConfig.fps > 7) cameraConfig.fps = 0; // default to auto if out of bounds
+  int fps_value = fps_values[cameraConfig.fps];
+  frame_limit_ms = fps_value > 0 ? 1000 / fps_value : 0; // 0 means no limit
+
+  int quality_values[] = {33, 63, 42, 30, 18, 6}; // Map 0...5 to quality values (0=auto, 1=very poor, ..., 5=very good)
+  if(cameraConfig.quality < 0 || cameraConfig.quality > 5) cameraConfig.quality = 0; // default to auto if out of bounds
+  quality = quality_values[cameraConfig.quality];
+
+  camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
+
+  if((info->model == CAMERA_OV3660)) {
+    if(cameraConfig.rotation == 1) {
+      s->set_hmirror(s, 0);
+      s->set_vflip(s, 1);
+    } else {
+      s->set_hmirror(s, 1);
+      s->set_vflip(s, 0);
+    }
+    //s->set_xclk(s, LEDC_TIMER_0, 8000000UL);
+    s->set_pll(s, 0, 25, 1, 0, 0, 0, 1, 10); // pushes 8MHz ext to same internally as 20mhz before
+    s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio
+    s->set_reg(s, 0x6706, 0x0f, 0x03); // Adjust temperature sampling frequency to 8 MHz XVCLK
+  } else if(s->id.PID == OV2640_PID) {
+    if(cameraConfig.rotation == 1) {
+      s->set_hmirror(s, 1);
+      s->set_vflip(s, 1);
+    } else {
+      s->set_hmirror(s, 0);
+      s->set_vflip(s, 0);
+    }
+    s->set_gainceiling(s, (gainceiling_t)2); // default is 2x, set to 1x to reduce noise
+    s->set_reg(s, 0x111, 0xff, 0x80); // activae clock doubler to compensate 8 Mhz 
+  }
+
+}
+
+void storeCameraConfig() {
+  char buffer[50];
+  snprintf(buffer, sizeof(buffer), "%d,%d,%d,%d\n", cameraConfig.rotation, cameraConfig.size, cameraConfig.fps, cameraConfig.quality);
+  writeFile("/camera_config.txt", buffer);
+}
+
+void loadCameraConfig() {
+  char buffer[50];
+  if(filesystem.exists("/camera_config.txt")) {
+    File file = filesystem.open("/camera_config.txt", "r");
+    if(file) {
+      size_t len = file.readBytes(buffer, sizeof(buffer)-1);
+      buffer[len] = '\0';
+      sscanf(buffer, "%d,%d,%d,%d", &cameraConfig.rotation, &cameraConfig.size, &cameraConfig.fps, &cameraConfig.quality);
+      file.close();
+    }
+  }
+}
 
 void initPwmThings() {
     // Disable UART RX if pinA or pinB is using GPIO3
@@ -110,7 +188,7 @@ void initPwmThings() {
        pwmThingConfigs[2].pinA == 3 || pwmThingConfigs[2].pinB == 3 || 
        pwmThingConfigs[3].pinA == 3 || pwmThingConfigs[3].pinB == 3) {
       Serial.println("Disabling UART RX because GPIO3 is used for IO.");
-      Serial.end();
+      delay(100); Serial.end();
       Serial.begin(115200, SERIAL_8N1, -1); // Disable RX pin by setting it to -1
     }
     MotorLeft.begin(pwmThingConfigs[0].pinA, pwmThingConfigs[0].pinB, pwmThingConfigs[0].thingType, pwmThingConfigs[0].inverted, 
@@ -159,19 +237,39 @@ httpd_handle_t stream_httpd = NULL;
 
 static esp_err_t index_handler(httpd_req_t *req)
 {
-  if(filesystem.exists("/index.html") == false) {
-    Serial.println("Serving internal index.html");
-    httpd_resp_set_type(req, "text/html");
-    return httpd_resp_send(req, (const char *)INDEX_HTML, strlen(INDEX_HTML));  
+  Serial.printf("Handling request for %s\n", req->uri);
+
+  char filename[32] = {0,};
+  const char *pData = NULL;
+  size_t dataLen = 0;
+  const char req_type[32] = "text/html";
+
+  if(strcmp(req->uri, "/") == 0 || strcmp(req->uri, "/index.html") == 0) {
+    strcpy(filename, "/index.html");
+    pData = INDEX_HTML;
+    dataLen = strlen(INDEX_HTML);
+  } else if (strcmp(req->uri, "/settings") == 0 || strcmp(req->uri, "/settings.html") == 0) {
+    strcpy(filename, "/settings.html");
+    pData = SETTINGS_HTML;
+    dataLen = strlen(SETTINGS_HTML);
+  } else if (strcmp(req->uri, "/favicon.ico") == 0) {
+    httpd_resp_set_type(req, "image/x-icon");
+    return httpd_resp_send(req, (const char *)favicon, sizeof(favicon));
   } 
-  Serial.println("Serving external index.html");
-  File file = filesystem.open("/index.html", "r");
+
+  if(filesystem.exists(filename) == false) {
+    Serial.printf("Serving internal %s\n", filename);
+    httpd_resp_set_type(req, req_type);
+    return httpd_resp_send(req, pData, dataLen);  
+  } 
+  Serial.printf("Serving external %s from LittleFS\n", filename);
+  File file = filesystem.open(filename, "r");
   if (!file) {
       httpd_resp_send_404(req);
-      Serial.println("Failed to open index.html");
+      Serial.printf("Failed to open file %s\n", filename);
       return ESP_FAIL;
   }
-  httpd_resp_set_type(req, "text/html");
+  httpd_resp_set_type(req, req_type);
 
   char chunk[1024];
   size_t read_bytes;
@@ -197,12 +295,13 @@ static esp_err_t info_handler(httpd_req_t *req){
   info_len = snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u bytes, Free PSRAM: %u bytes, \r\n", 
      infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram());
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, Channel: %d, IP: %s \r\n", 
-     WiFi.SSID().c_str(), WiFi.BSSIDstr().c_str(), WiFi.channel(), WiFi.localIP().toString().c_str());
+     current_ssid, WiFi.BSSIDstr().c_str(), WiFi.channel(), current_IP.toString().c_str());
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d, Command/s: %d\r\n", 
      WiFi.RSSI(), fps, bps/1024, cps);     
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version: %s\r\n", version_string);  
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", "
      "B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo1 (%d)\", E=\"Servo2 (%d)\"", 
-     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0UL), Servo1.getDuty(), Servo2.getDuty());
+     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0L), Servo1.getDuty(), Servo2.getDuty());
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -238,7 +337,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
       return ESP_FAIL;
     }
     if (httpd_req_get_url_query_str(req, buf, buf_len) == ESP_OK) {
-      //Serial.printf("Received query: %s\n", buf);
+      Serial.printf("Received query: %s\n", buf);
       // Loop through the expected query keys and extract their values
       for (int i = 0; i < num_keys; i++) {
         if (httpd_query_key_value(buf, query_keys[i], variable, sizeof(variable)) == ESP_OK) {
@@ -288,6 +387,59 @@ static esp_err_t cmd_handler(httpd_req_t *req){
           free(buf);
           return ESP_OK;
         } 
+      }
+      if((strcmp(buf, "pwmThingAvailablePins") == 0)) {
+        Serial.println("Available pins request received");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, availablePins, strlen(availablePins));
+        free(buf);
+        return ESP_OK;
+      }
+      if((strcmp(buf, "cameraConfigRead") == 0)) {
+        Serial.println("Camera config request received");
+        httpd_resp_set_type(req, "text/plain");
+        char response[256];
+        snprintf(response, sizeof(response), "%d,%d,%d,%d", 
+          cameraConfig.rotation, cameraConfig.size, cameraConfig.fps, cameraConfig.quality);
+        httpd_resp_send(req, response, strlen(response));
+        free(buf);
+        return ESP_OK;
+      }
+      if((httpd_query_key_value(buf, "cameraConfigWrite", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        Serial.println("Camera config write request received");
+        int values[4];
+        if(sscanf(strbuf, "%d,%d,%d,%d", &values[0], &values[1], &values[2], &values[3]) == 4) {
+          cameraConfig.rotation = values[0];
+          cameraConfig.size = values[1];
+          cameraConfig.fps = values[2];
+          cameraConfig.quality = values[3];
+          Serial.printf("Updated Camera Config: rotation=%d, size=%d, fps=%d, quality=%d\n", 
+            cameraConfig.rotation, cameraConfig.size, cameraConfig.fps, cameraConfig.quality);
+          setCameraToConfig();
+          storeCameraConfig(); 
+        }
+        free(buf);
+        return ESP_OK;
+      }
+      if((strcmp(buf, "wifi_scan") == 0)) {
+        Serial.println("Scan Wifis...");
+        int n = WiFi.scanNetworks(false, true);
+        String json = "[";
+        for (int i = 0; i < n; i++) {
+          if (i > 0) json += ",";
+          json += "{\"ssid\":\"" + WiFi.SSID(i) + "\"";
+          json += ",\"bssid\":\"" + WiFi.BSSIDstr(i) + "\"";
+          json += ",\"rssi\":"   + String(WiFi.RSSI(i));
+          json += ",\"auth\":"   + String((int)WiFi.encryptionType(i));
+          json += "}";
+        }
+        json += "]";
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, json.c_str(), json.length());
+
+
+        free(buf);
+        return ESP_OK;
       }
       if((httpd_query_key_value(buf, "pwmThingWrite", strbuf, sizeof(strbuf)) == ESP_OK)) {
         Serial.printf("Write request for PwmThing index: %s\n", strbuf);
@@ -358,20 +510,15 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   float d = key_values[5]/127.0; // Convert to -1.0 to 1.0
   float e = key_values[6]/127.0; // Convert to -1.0 to 1.0
 
-  frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
+  //frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
 
-  if(c > 0) {
-    int wval = constrain(c * 255, 0, 255);
-    if(WhiteLedMaxOnTimeMs <= 0) {
-      if(wval > WhiteLedTimeoutThresholdValue) wval = WhiteLedTimeoutThresholdValue; // Limit LED to threshold value to prevent overheating
-    }
-    WhiteLED.set(wval);
-    RedLED.set(0);
-  } else {
-    WhiteLED.set(0);
-    RedLED.set(constrain(c * -255, 0, 255));
+  int wval = constrain(c * 255, 0, 255);
+  if(WhiteLedMaxOnTimeMs <= 0) {
+    if(wval > WhiteLedTimeoutThresholdValue) wval = WhiteLedTimeoutThresholdValue; // Limit LED to threshold value to prevent overheating
   }
+  WhiteLED.set(wval);
 
+  /*
   quality = constrain(((1.0-b)/2.0)*63,4, 63);  // 0...63 lower=higher quality
   static int prev_quality = 10;
   if(quality != prev_quality) { 
@@ -379,6 +526,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
     s->set_quality(s, quality); 
     prev_quality = quality; 
   }
+  */
   
   if(res){
     return httpd_resp_send_500(req);
@@ -392,6 +540,18 @@ void startCameraServer(){
   config.server_port = 80;
   httpd_uri_t index_uri = {
     .uri       = "/",
+    .method    = HTTP_GET,
+    .handler   = index_handler,
+    .user_ctx  = NULL
+  };
+  httpd_uri_t settings_uri = {
+    .uri       = "/settings",
+    .method    = HTTP_GET,
+    .handler   = index_handler,
+    .user_ctx  = NULL
+  };
+  httpd_uri_t favicon_uri = {
+    .uri       = "/favicon.ico",
     .method    = HTTP_GET,
     .handler   = index_handler,
     .user_ctx  = NULL
@@ -422,6 +582,8 @@ void startCameraServer(){
   };
   if (httpd_start(&camera_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(camera_httpd, &index_uri);
+    httpd_register_uri_handler(camera_httpd, &settings_uri);
+    httpd_register_uri_handler(camera_httpd, &favicon_uri);
     httpd_register_uri_handler(camera_httpd, &cmd_uri);
     httpd_register_uri_handler(camera_httpd, &info_uri);
   } else Serial.println("Failed to start camera HTTP server");
@@ -457,10 +619,6 @@ void setup() {
   readFile("/wifi_password.txt", wifi_password, sizeof(wifi_password));
   Serial.printf("Loaded config: Name=%s, SSID=%s, Password=%s\n", roboter_name, wifi_ssid, wifi_password);
 
-//  MotorLeft.begin(MOTOR_2_PIN_1, MOTOR_2_PIN_2, PwmThing::halfBridgeIdleHigh, true);
-//  MotorRight.begin(MOTOR_1_PIN_1, MOTOR_1_PIN_2, PwmThing::halfBridgeIdleHigh, true);
-//  Servo1.begin(SERVO_1_PIN, -1, PwmThing::servoMotor);
-  
   loadPwmThingConfigs();
   initPwmThings();  
   storePwmThingConfigs(); // Store default configs if not already stored
@@ -508,17 +666,10 @@ void setup() {
 
   sensor_t * s = esp_camera_sensor_get();
   camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
-  if((info->model == CAMERA_OV3660)) {
-    s->set_hmirror(s, 1);
-    s->set_vflip(s, 0);          // 0 = disable , 1 = enable
-    //s->set_xclk(s, LEDC_TIMER_0, 8000000UL);
-    s->set_pll(s, 0, 25, 1, 0, 0, 0, 1, 10); // pushes 8MHz ext to same internally as 20mhz before
-    s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio
-    s->set_reg(s, 0x6706, 0x0f, 0x03); // Adjust temperature sampling frequency to 8 MHz XVCLK
-  } else if(s->id.PID == OV2640_PID) {
-    s->set_gainceiling(s, (gainceiling_t)2); // default is 2x, set to 1x to reduce noise
-    s->set_reg(s, 0x111, 0xff, 0x80); // activae clock doubler to compensate 8 Mhz 
-  }
+
+  loadCameraConfig();
+  setCameraToConfig();
+  storeCameraConfig(); // Store default config if not already stored
 
   // Wi-Fi connection
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
@@ -546,11 +697,15 @@ void setup() {
     } else {
       Serial.println("Err: Can't start DNS server!");
     }
+    current_IP = WiFi.softAPIP();
+  } else {
+    current_IP = WiFi.localIP();
+    strcpy(current_ssid, WiFi.SSID().c_str());
   }
   //esp_wifi_set_max_tx_power(40);
 
   WiFi.setSleep(false);
-  Serial.printf("\nWiFi connected. Camera Stream Ready! Go to: http://%s or http://%s.local\n", WiFi.localIP().toString().c_str(), roboter_name);
+  Serial.printf("\nWiFi connected. Camera Stream Ready! Go to: http://%s or http://%s.local\n", current_IP.toString().c_str(), roboter_name);
   MDNS.begin(roboter_name);
   MDNS.addService("_http", "_tcp", 80);
   #ifdef ENABLE_OTA
@@ -595,6 +750,58 @@ void setup() {
 
 }
 
+int WiFiScanState = 0; // 0 = idle, 1 = scanning, 2 = scan done
+
+void startWiFiScan() {
+  Serial.println("Scan start");
+  // WiFi.scanNetworks will return immediately in Async Mode.
+  WiFiScanState = 1;
+  WiFi.scanNetworks(true);  // 'true' turns Async Mode ON
+}
+
+void printScannedNetworks(uint16_t networksFound) {
+  if (networksFound == 0) {
+    Serial.println("no networks found");
+  } else {
+    Serial.println("\nScan done");
+    Serial.print(networksFound);
+    Serial.println(" networks found");
+    Serial.println("Nr | SSID                             | RSSI | CH | Encryption");
+    for (int i = 0; i < networksFound; ++i) {
+      // Print SSID and RSSI for each network found
+      Serial.printf("%2d", i + 1);
+      Serial.print(" | ");
+      Serial.printf("%-32.32s", WiFi.SSID(i).c_str());
+      Serial.print(" | ");
+      // print BSSID
+      Serial.printf("%02x:%02x:%02x:%02x:%02x:%02x", WiFi.BSSID(i)[0], WiFi.BSSID(i)[1], WiFi.BSSID(i)[2], 
+        WiFi.BSSID(i)[3], WiFi.BSSID(i)[4], WiFi.BSSID(i)[5]);
+      Serial.print(" | ");
+      Serial.printf("%4" PRIi32, WiFi.RSSI(i));
+      Serial.print(" | ");
+      Serial.printf("%2" PRIi32, WiFi.channel(i));
+      Serial.print(" | ");
+      switch (WiFi.encryptionType(i)) {
+        case WIFI_AUTH_OPEN:            Serial.print("open"); break;
+        case WIFI_AUTH_WEP:             Serial.print("WEP"); break;
+        case WIFI_AUTH_WPA_PSK:         Serial.print("WPA"); break;
+        case WIFI_AUTH_WPA2_PSK:        Serial.print("WPA2"); break;
+        case WIFI_AUTH_WPA_WPA2_PSK:    Serial.print("WPA+WPA2"); break;
+        case WIFI_AUTH_WPA2_ENTERPRISE: Serial.print("WPA2-EAP"); break;
+        case WIFI_AUTH_WPA3_PSK:        Serial.print("WPA3"); break;
+        case WIFI_AUTH_WPA2_WPA3_PSK:   Serial.print("WPA2+WPA3"); break;
+        case WIFI_AUTH_WAPI_PSK:        Serial.print("WAPI"); break;
+        default:                        Serial.print("unknown");
+      }
+      Serial.println();
+      delay(10);
+    }
+    Serial.println("");
+    // Delete the scan result to free memory for code below.
+    WiFi.scanDelete();
+  }
+}
+
 void processSerial() {
   const int bufferSize = 128;
   static char inputBuffer[bufferSize];
@@ -627,6 +834,8 @@ void processSerial() {
         strlcpy(wifi_password, inputBuffer + 9, sizeof(wifi_password));
         writeFile("/wifi_password.txt", wifi_password);
         Serial.printf("Updated WiFi password to: %s\n", wifi_password);
+      } else if(strncmp(inputBuffer, "scan", 4) == 0) {
+        startWiFiScan();
       } else if(strncmp(inputBuffer, "reboot", 6) == 0) {
         Serial.println("Rebooting...");
         delay(100);
@@ -638,6 +847,8 @@ void processSerial() {
     } 
   }
 }
+
+
 
 void loop() {
   if(OTA_Status < 2) calc_fps();
@@ -665,7 +876,17 @@ void loop() {
 
   processSerial(); // Check for serial commands 
 
-  if(!APMode) wifiMulti.run(); // Keep WiFi connection alive, will reconnect if connection is lost
+  //if(!APMode) wifiMulti.run(); // Keep WiFi connection alive, will reconnect if connection is lost
+
+  // check WiFi Scan Async process
+  int16_t WiFiScanStatus = WiFi.scanComplete();
+  if(WiFiScanState == 1) {
+    if(WiFiScanStatus >= 0) {
+      WiFiScanState = 2; // Scan done, process results in next loop iteration
+      printScannedNetworks(WiFiScanStatus);
+      WiFiScanState = 0; // Reset to idle after processing
+    }
+  }
 
   delay(10);
 }
