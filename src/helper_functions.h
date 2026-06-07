@@ -6,6 +6,10 @@ extern const int usablePins[];
 extern const size_t usablePinsCount; 
 extern const char availablePins[];
 
+extern char CompileTime[20];
+
+void getCompileTime();
+
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh);
 
 // Helper: hex char (0-9a-f) to decimal value

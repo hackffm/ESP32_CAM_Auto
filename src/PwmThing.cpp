@@ -1,5 +1,6 @@
 #include "PwmThing.h"
 #include "driver/ledc.h" 
+#include "driver/gpio.h"
 
 // Constructor with default parameters
 PwmThing::PwmThing() : pinA(-1), pinB(-1), thingType(pwmOut), inverted(false), lastValue(0) {}
@@ -28,11 +29,11 @@ void PwmThing::begin(int pinA, int pinB, ThingType thingType, bool inverted, int
       case pwmOutGamma:
           // For simple PWM output, set frequency and resolution
           if (pinA >= 0) {
-              analogWriteFrequency(pinA, 19531); // 20 kHz
+              analogWriteFrequency(pinA, PwmThing::PWMHIGHFREQ); // 20 kHz
               analogWriteResolution(pinA, 12);    // 12 bits (0-4095)
           }
           if (pinB >= 0) {
-              analogWriteFrequency(pinB, 19531); // 20 kHz
+              analogWriteFrequency(pinB, PwmThing::PWMHIGHFREQ); // 20 kHz
               analogWriteResolution(pinB, 12);    // 12 bits (0-4095)
           }
           break;
@@ -41,9 +42,9 @@ void PwmThing::begin(int pinA, int pinB, ThingType thingType, bool inverted, int
       case halfBridgeIdleHigh:
           // For half-bridge control, set frequency and resolution for both pins
           if ((pinA >= 0) && (pinB >= 0)) {
-              analogWriteFrequency(pinA, 19531); // 20 kHz
+              analogWriteFrequency(pinA, PwmThing::PWMHIGHFREQ); // 20 kHz
               analogWriteResolution(pinA, 12);    // 12 bits (0-4095)
-              analogWriteFrequency(pinB, 19531); // 20 kHz
+              analogWriteFrequency(pinB, PwmThing::PWMHIGHFREQ); // 20 kHz
               analogWriteResolution(pinB, 12);    // 12 bits (0-4095)
           } else {
               Serial.println("Half-bridge control requires two valid pins");
@@ -71,7 +72,8 @@ void PwmThing::begin(int pinA, int pinB, ThingType thingType, bool inverted, int
 }
 
 // Method to set the value
-void PwmThing::set(int value) {
+void PwmThing::set(int value, bool clearAnimation) {
+  if(clearAnimation) animationType = 0; // Clear animation if requested
   if((pinA < 0) && (pinB < 0)) return; // No valid pins to control
   if(value == lastValue) return; // No change, skip
   value = constrain(value, -255, 255); // Constrain value to valid range
@@ -83,7 +85,6 @@ void PwmThing::set(int value) {
   switch (thingType) {
     case pwmOut:
     case pwmOutGamma: // same as pwmOut, but with gamma correction for LED brightness control
-      if(inverted) value = 255 - value; // Invert value if needed
       value = constrain(value, 0, 255);
       if(thingType == pwmOutGamma) {
         // Apply gamma correction (using a simple approximation)
@@ -92,6 +93,8 @@ void PwmThing::set(int value) {
       } else {
         value = value * 16; // Scale to 12-bit resolution (0-4095)
       }
+      value = constrain(value, 0, 4095);
+      if(inverted) value = 4095 - value; // Invert value if needed
       if (pinA >= 0) {
           analogWrite(pinA, value);
       }
@@ -138,6 +141,44 @@ void PwmThing::set(int value) {
     default:
       Serial.println("Invalid thingType");
       break;
+  }
+}
+
+// Method to set to lowest power
+void PwmThing::end() {
+  switch (thingType) {
+    case pwmOut:
+    case pwmOutGamma: // same as pwmOut, but with gamma correction for LED brightness control
+      set(0);
+      break;
+
+    case halfBridge:
+    case halfBridgeIdleHigh:
+    case servoMotor:
+    case servoMotor0Stop:
+      if(pinA >= 0) { analogWrite(pinA, 0); digitalWrite(pinA, LOW); gpio_hold_en((gpio_num_t)pinA);}
+      if(pinB >= 0) { analogWrite(pinB, 0); digitalWrite(pinB, LOW); gpio_hold_en((gpio_num_t)pinB);}
+      break;   
+
+    default:
+      Serial.println("Invalid thingType");
+      break;
+  }
+}
+
+// Do animtaions, only aligned to millis(), might start in the middle of an animation cycle
+// Animation type: 0 = no animation, 1 = linear up and down fade
+void PwmThing::doAnimation() {
+  if(animationType == 0) return; // No animation
+  uint32_t timeInCycle = millis() % animationSpeed;
+  int value;
+  if(animationType == 1) { // Linear up and down fade
+    if(timeInCycle < animationSpeed/2) {
+      value = map(timeInCycle, 0, animationSpeed/2, animationLowValue, animationHighValue);
+    } else {
+      value = map(timeInCycle, animationSpeed/2, animationSpeed, animationHighValue, animationLowValue);
+    }
+    set(value, false); // Set value without clearing animation
   }
 }
 

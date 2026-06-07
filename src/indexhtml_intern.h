@@ -6,6 +6,10 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Hackffm ESP32 CAM Bot</title>
+
+  <!-- ============================================================
+       GLOBAL STYLES
+  ============================================================ -->
   <style>
     body {
       font-family: sans-serif; margin: 0;
@@ -19,33 +23,120 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       padding: 14px; margin: 16px auto;
       max-width: 700px; text-align: left; }
 
-    /* ── Stream / joystick ── */
-    #photo-container {
-      position: relative; display: inline-block;
-      /* width follows the scaled image; joystick stays on top unscaled */ }
+    /* ── Sliders ── */
+    .slider-container { margin-bottom: 10px; }
+    .slider-container label { font-weight: bold; color: #8bdcf3; font-size: 14px; }
+    .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+    input[type=range] { flex: 1; height: 35px; }
+    .slider-value { min-width: 55px; font-weight: bold; color: #9b8bf3; text-align: right; }
 
-    #media-wrapper { display: flex; justify-content: center;
-      align-items: center; gap: 20px; flex-wrap: wrap; }
+    /* ── Gamepad ── */
+    .gpds_row { display: flex; gap: 8px;
+      align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .gpds_axes { margin-top: 5px; font-family: monospace; font-size: 12px; color: #aaa; }
 
-    .side-mode   { flex-direction: row; }
-    .normal-mode { flex-direction: column; }
+    input[type="text"]   { width: 90px; font-size: 12px; padding: 2px; }
+    input[type="number"] { width: 55px; font-size: 12px; padding: 2px; }
+    select { font-size: 12px; padding: 2px;
+      background: #1a1a1a; color: white; border: 1px solid #555; border-radius: 4px; }
 
-    #joystick { margin: 0; touch-action: none; transition: all 0.2s ease; z-index: 10; }
+    button { padding: 5px 12px; font-size: 13px; border: none; border-radius: 4px;
+      background-color: #333; color: #8bdcf3; cursor: pointer; }
+    button:hover { background-color: #555; }
 
-    .normal-mode #joystick { display: block; margin: 15px auto; width: 300px; height: 300px; }
+    /* ── Bottom button row ── */
+    .action-btn-row {
+      display: flex; gap: 10px; justify-content: center;
+      flex-wrap: wrap; margin: 16px auto; max-width: 700px; }
 
-    .side-mode #joystick { position: absolute; right: 10px; bottom: 10px;
-      width: 210px; height: 210px; pointer-events: auto; }
+    .reconnect-btn {
+      padding: 8px 16px; font-size: 14px; border: none; border-radius: 6px;
+      background-color: #333; color: #8bdcf3; cursor: pointer; }
+    .reconnect-btn:hover { background-color: #555; }
 
-    /* photo is scaled via CSS transform; container clips to natural size */
+    footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid #333; }
+
+    a:link    { text-decoration: none; color: #f0ad5e; }
+    a:visited { text-decoration: none; color: #f0ad5e; }
+    a:hover   { text-decoration: underline; }
+    a:active  { text-decoration: underline; }
+  </style>
+
+  <!-- ============================================================
+       STREAM + JOYSTICK STYLES
+       (scoped to #media-wrapper and related elements)
+  ============================================================ -->
+  <style>
+    /* ── Stream area ── */
+    #stream-area {
+      position: relative;
+      display: inline-block;
+      width: 640px;
+      height: 480px;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #stream-placeholder {
+      position: absolute; top: 0; left: 0;
+      width: 640px; height: 480px;
+      display: block;
+    }
+
     #photo-scale-clip {
-      display: inline-block; overflow: hidden;
-      line-height: 0; }
+      position: absolute; top: 0; left: 0;
+      display: inline-block;
+      line-height: 0;
+      overflow: hidden;
+    }
 
     #photo {
       display: block; max-width: none;
       transform-origin: top left;
-      transition: transform 0.2s ease; }
+      transition: transform 0.2s ease;
+    }
+
+    /* joystick wrapper pinned bottom-right in overlay mode */
+    #joystick-wrapper {
+      position: absolute;
+      bottom: 10px; right: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      z-index: 20;
+      pointer-events: auto;
+    }
+    #joystick-wrapper.normal-pos {
+      position: static;
+      margin: 15px auto 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #joy-coords {
+      font-family: monospace;
+      font-size: 11px;
+      color: #ff0;
+      background: rgba(0,0,0,0.5);
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-bottom: 3px;
+      white-space: pre;
+    }
+
+    #joystick {
+      touch-action: none;
+      cursor: crosshair;
+    }
+
+    #media-wrapper {
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      flex-direction: column;
+      align-items: center;
+    }
 
     #info { font-family: monospace; margin: 8px auto; color: #aaa;
       white-space: pre-wrap; max-width: 700px; text-align: center; }
@@ -70,96 +161,116 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       cursor: pointer; }
     #btn-stream-toggle:hover { background-color: #555; }
     #btn-stream-toggle.running { color: #f87; }
-
-    /* ── Sliders ── */
-    .slider-container { margin-bottom: 10px; }
-    .slider-container label { font-weight: bold; color: #8bdcf3; font-size: 14px; }
-    .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
-    input[type=range] { flex: 1; height: 35px; }
-    .slider-value { min-width: 45px; font-weight: bold; color: #9b8bf3; text-align: right; }
-
-    /* ── Gamepad ── */
-    .gpds_row { display: flex; gap: 8px;
-      align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
-    .gpds_axes { margin-top: 5px; font-family: monospace; font-size: 12px; color: #aaa; }
-
-    input[type="text"]   { width: 90px; font-size: 12px; padding: 2px; }
-    input[type="number"] { width: 55px; font-size: 12px; padding: 2px; }
-    select { font-size: 12px; padding: 2px;
-      background: #1a1a1a; color: white; border: 1px solid #555; border-radius: 4px; }
-
-    button { padding: 5px 12px; font-size: 13px; border: none; border-radius: 4px;
-      background-color: #333; color: #8bdcf3; cursor: pointer; }
-    button:hover { background-color: #555; }
-
-    /* ── Bottom button row ── */
-    .action-btn-row {
-      display: flex; gap: 10px; justify-content: center;
-      flex-wrap: wrap; margin: 16px auto; max-width: 700px; }
-
-    .settings-btn {
-      padding: 8px 20px; font-size: 14px; border: none; border-radius: 6px;
-      background-color: #444; color: #f0ad5e; cursor: pointer;
-      text-decoration: none; display: inline-block; }
-    .settings-btn:hover { background-color: #666; }
-
-    .reconnect-btn {
-      padding: 8px 16px; font-size: 14px; border: none; border-radius: 6px;
-      background-color: #333; color: #8bdcf3; cursor: pointer; }
-    .reconnect-btn:hover { background-color: #555; }
-
-    footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid #333; }
-
-    a:link    { text-decoration: none; color: #f0ad5e; }
-    a:visited { text-decoration: none; color: #f0ad5e; }
-    a:hover   { text-decoration: underline; }
-    a:active  { text-decoration: underline; }
   </style>
 </head>
 <body>
+
   <h1 id="title">Hackffm ESP32 CAM Bot</h1>
 
-  <!-- ── Stream + overlay joystick ── -->
-  <div id="media-wrapper" class="normal-mode">
-    <div id="photo-container">
-      <div id="photo-scale-clip">
-        <img id="photo">
+  <!-- ##############################################################
+       BLOCK 1 — STREAM AREA + JOYSTICK + STREAM CONTROLS + INFO
+       Self-contained visual block. Interacts with the rest of the
+       page only through:
+         • WRITE: cmd_ml, cmd_mr  (joystick output)
+         • READ:  nothing from other blocks at runtime
+       Public API used by Gamepad block:
+         • setStickFromGamepad(nx, ny)  — mirror gamepad axes into stick
+         • triggerStickRelease()        — release stick from gamepad
+  ############################################################## -->
+  <div id="block-stream">
+
+    <!-- Stream image + joystick canvas -->
+    <div id="media-wrapper">
+      <div id="stream-area">
+        <!-- black grid placeholder shown when no stream is active -->
+        <canvas id="stream-placeholder"></canvas>
+        <!-- actual stream image -->
+        <div id="photo-scale-clip">
+          <img id="photo">
+        </div>
+        <!-- joystick overlay (default: pinned bottom-right of stream-area) -->
+        <div id="joystick-wrapper">
+          <div id="joy-coords">x:0.00 y:0.00  ml:0 mr:0</div>
+          <canvas id="joystick" width="300" height="300"></canvas>
+        </div>
       </div>
-      <canvas id="joystick" width="300" height="300"></canvas>
     </div>
-  </div>
 
-  <!-- ── Stream controls ── -->
-  <div class="stream-controls">
-    <label>
-      <input type="checkbox" id="modeToggle">
-      Joystick overlay
-    </label>
+    <!-- Stream controls bar (scale, overlay toggle, start/stop) -->
+    <div class="stream-controls">
+      <label>
+        <input type="checkbox" id="modeToggle" checked>
+        Joystick overlay
+      </label>
+      <label>
+        Scale:
+        <select id="streamScale">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+        </select>
+      </label>
+      <button id="btn-stream-toggle" class="running">⏹ Stop stream</button>
+    </div>
 
-    <label>
-      Scale:
-      <select id="streamScale">
-        <option value="0.5">0.5×</option>
-        <option value="1"   selected>1×</option>
-        <option value="2">2×</option>
-        <option value="4">4×</option>
-      </select>
-    </label>
+    <!-- Info line polled from /info -->
+    <div id="info"></div>
 
-    <button id="btn-stream-toggle" class="running">⏹ Stop stream</button>
-  </div>
+  </div><!-- end #block-stream -->
 
-  <div id="info"></div>
+  <!-- ##############################################################
+       BLOCK 2 — DRIVE & LIGHT CONTROLS
+       Writes: cmd_light, cmd_servo1, cmd_servo2
+       Reads:  nothing from other blocks
+  ############################################################## -->
+  <div id="block-drive" class="section">
+    <h2>Drive &amp; Light Controls</h2>
 
-  <!-- ── Sliders box ── -->
-  <div class="section">
-    <h2>Controls</h2>
-    <div id="sliders"></div>
-  </div>
+    <!-- Light slider -->
+    <div class="slider-container">
+      <label id="label-light">💡 Light (0–100%)</label>
+      <div class="slider-row">
+        <input type="range" id="slider-light" min="0" max="100" value="0">
+        <div class="slider-value" id="val-light">0%</div>
+      </div>
+    </div>
 
-  <!-- ── Gamepad box ── -->
-  <div class="section">
+    <!-- Servo 1 slider -->
+    <div class="slider-container">
+      <label id="label-servo1">Servo 1</label>
+      <div class="slider-row">
+        <input type="range" id="slider-servo1" min="-255" max="255" value="0">
+        <div class="slider-value" id="val-servo1">0</div>
+      </div>
+    </div>
+
+    <!-- Servo 2 slider -->
+    <div class="slider-container">
+      <label id="label-servo2">Servo 2</label>
+      <div class="slider-row">
+        <input type="range" id="slider-servo2" min="-255" max="255" value="0">
+        <div class="slider-value" id="val-servo2">0</div>
+      </div>
+    </div>
+  </div><!-- end #block-drive -->
+
+  <!-- ##############################################################
+       BLOCK 3 — GAMEPAD
+       Reads:   nothing from other blocks directly
+       Writes (via public API only):
+         • setStickFromGamepad(nx, ny)  → Block 1 joystick
+         • triggerStickRelease()        → Block 1 joystick
+       Future button actions (servo up/down) will call Block 2 API.
+  ############################################################## -->
+  <div id="block-gamepad" class="section">
     <h2>Gamepad</h2>
+
+    <div class="gpds_row">
+      <span style="color:#8bdcf3;font-size:14px;">Gamepad:</span>
+      <select id="gpdsel_gamepadSelect"></select>
+    </div>
 
     <div class="gpds_row">
       <button id="searchGamepad">Search gamepad</button>
@@ -167,18 +278,23 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     </div>
 
     <div class="gpds_row">
-      <button id="searchGamepadServoUP">Set servo UP</button>
-      <p id="outputGamepadServoUP" style="margin:0">No gamepad button set</p>
+      <button id="searchGamepadServo1">Set button to toggle Servo 1</button>
+      <p id="outputGamepadServo1" style="margin:0">No gamepad button set</p>
     </div>
 
     <div class="gpds_row">
-      <button id="searchGamepadServoDOWN">Set servo DOWN</button>
-      <p id="outputGamepadServoDOWN" style="margin:0">No gamepad button set</p>
+      <button id="searchGamepadServo2">Set button to toggle Servo 2</button>
+      <p id="outputGamepadServo2" style="margin:0">No gamepad button set</p>
     </div>
 
     <div class="gpds_row">
-      <span style="color:#8bdcf3;font-size:14px;">Gamepad:</span>
-      <select id="gpdsel_gamepadSelect"></select>
+      <button id="searchGamepadLowLight">Set button to toggle low light</button>
+      <p id="outputGamepadLowLight" style="margin:0">No gamepad button set</p>
+    </div>
+
+    <div class="gpds_row">
+      <button id="searchGamepadFlashLight">Set button to turn on flash light</button>
+      <p id="outputGamepadFlashLight" style="margin:0">No gamepad button set</p>
     </div>
 
     <div class="gpds_row">
@@ -189,7 +305,6 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         <option value="4">4</option><option value="5">5</option>
       </select>
       <label><input type="checkbox" id="gpdsel_invertX"> Invert</label>
-
       <span style="color:#8bdcf3;font-size:14px;margin-left:8px;">Y Axis:</span>
       <select id="gpdsel_yAxis">
         <option value="0">0</option><option value="1" selected>1</option>
@@ -205,279 +320,154 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     </div>
 
     <div class="gpds_axes" id="gpdsel_axesDisplay"></div>
-  </div>
+  </div><!-- end #block-gamepad -->
 
-  <!-- ── Action buttons row ── -->
-  <div class="action-btn-row">
-    <button id="btn-reconnect" class="reconnect-btn">🔄 WiFi Reconnect</button>
-    <button id="btn-restart"   class="reconnect-btn">⟳ Restart</button>
-    <a href="/settings" class="settings-btn">⚙ Settings</a>
-  </div>
+  <!-- ##############################################################
+       BLOCK 4 — ACTION BUTTONS + FOOTER
+       No dependencies on other blocks except triggering /action URLs.
+  ############################################################## -->
+  <div id="block-actions">
 
-  <footer>
-    <div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">
-      <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC"
-       alt="hackffm.de" style="width:51px;height:63px;"/>
-      <span>
-        ESP32_CAM_Auto V1.00 on
-        <a href="https://github.com/hackffm/ESP32_CAM_Auto">GitHub</a> |
-        <a href="https://www.hackerspace-ffm.de/wiki/index.php?title=FPV-Roboter">&copy; 2026 Hackerspace-FFM e.V.</a>
-      </span>
+    <div class="action-btn-row">
+      <button id="btn-reconnect" class="reconnect-btn">🔄 WiFi Reconnect</button>
+      <button id="btn-restart"   class="reconnect-btn">⟳ Restart</button>
+      <button id="btn-shutdown"  class="reconnect-btn">⏻ Power off</button>
+      <button id="btn-trigger"   class="reconnect-btn">📷 Trigger</button>
+      <button id="btn-settings"  class="reconnect-btn">⚙ Settings</button>
     </div>
-  </footer>
 
-<script>
-  /* ================= CONFIG ================= */
-  const LIMIT_RADIUS = 150;
-  const DEADZONE_RADIUS = 0;
-  const STICK_RADIUS = 25;
-  const MAX_VALUE = 255;
-  const UPDATE_INTERVAL = 50;
-  let   STICK_COLOR = "rgba(255,165,0,0.3)";
+    <footer>
+      <div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;">
+        <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC"
+         alt="hackffm.de" style="width:51px;height:63px;"/>
+        <span>
+          ESP32_CAM_Auto <span id="version-display">V1.00</span> on
+          <a href="https://github.com/hackffm/ESP32_CAM_Auto">GitHub</a> |
+          <a href="https://www.hackerspace-ffm.de/wiki/index.php?title=FPV-Roboter">&copy; 2026 Hackerspace-FFM e.V.</a>
+        </span>
+      </div>
+    </footer>
 
-  const STICK_X_EXPO_FACTOR = 0.35;
-  const STICK_Y_EXPO_FACTOR = 0.7;
+  </div><!-- end #block-actions -->
 
-  /* ========================================== */
 
-  const canvas       = document.getElementById("joystick");
-  const ctx          = canvas.getContext("2d");
-  const photo        = document.getElementById("photo");
-  const scaleClip    = document.getElementById("photo-scale-clip");
-  const titleElement = document.getElementById("title");
+  <!-- ==============================================================
+       JAVASCRIPT — split into four matching script blocks
+  ============================================================== -->
 
-  let stick = { x: 0, y: 0 };
-  let dragging = false;
-  let lastSendTime = 0;
-  let roboter_name_set = false;
-  let sliderValues = { A:0, B:0, C:0, D:0, E:0 };
+  <!-- ============================================================
+       JS BLOCK 0 — SHARED STATE & NETWORK LAYER
+       Owns: cmd_* variables, sendData(), heartbeat, robotState,
+             /info polling, applyParsedState().
+       Everything else calls sendData() and writes cmd_* here.
+  ============================================================ -->
+  <script>
+  /* ── Command variables (written by all blocks, read by sendData) ── */
+  let cmd_ml     = 0;   // left  motor  -255 … +255
+  let cmd_mr     = 0;   // right motor  -255 … +255
+  let cmd_light  = 0;   // light        0   … 255
+  let cmd_servo1 = 0;   // servo 1      -255 … +255
+  let cmd_servo2 = 0;   // servo 2      -255 … +255
 
-  /* ============= STREAM SCALE ============= */
-  function applyScale() {
-    const s = parseFloat(document.getElementById('streamScale').value);
-    photo.style.transform = `scale(${s})`;
-    // shrink/grow the clipping wrapper so surrounding layout follows
-    if (photo.naturalWidth) {
-      scaleClip.style.width  = (photo.naturalWidth  * s) + 'px';
-      scaleClip.style.height = (photo.naturalHeight * s) + 'px';
-    } else {
-      scaleClip.style.width  = '';
-      scaleClip.style.height = '';
-    }
-  }
-
-  document.getElementById('streamScale').addEventListener('change', applyScale);
-
-  // re-apply after image dimensions become known
-  photo.addEventListener('load', applyScale);
-
-  /* ============= STREAM START / STOP ============= */
-  let streamRunning = false;
-  const btnStreamToggle = document.getElementById('btn-stream-toggle');
-
-  function startStream() {
-    photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`;
-    streamRunning = true;
-    btnStreamToggle.textContent = '⏹ Stop stream';
-    btnStreamToggle.classList.add('running');
-  }
-
-  function stopStream() {
-    photo.src = '';          // cancels the ongoing MJPEG fetch
-    streamRunning = false;
-    btnStreamToggle.textContent = '▶ Start stream';
-    btnStreamToggle.classList.remove('running');
-    // clear the clip dimensions so the layout collapses cleanly
-    scaleClip.style.width  = '';
-    scaleClip.style.height = '';
-  }
-
-  btnStreamToggle.addEventListener('click', () => {
-    if (streamRunning) stopStream(); else startStream();
-  });
-
-  /* ============= STREAM LOAD / ERROR / WATCHDOG ============= */
-  let streamRetryDelay = 1000;
-
-  function loadStream() {
-    if (!streamRunning) return;
-    photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`;
-    updateJoystickMode();
-  }
-
-  photo.onload  = () => { streamRetryDelay = 1000; applyScale(); };
-  photo.onerror = () => {
-    if (!streamRunning) return;
-    console.warn("Stream error, retrying in " + streamRetryDelay + "ms");
-    setTimeout(loadStream, streamRetryDelay);
-    streamRetryDelay = Math.min(streamRetryDelay * 2, 10000);
+  /* ── Parsed state from robot ── */
+  let robotState = {
+    Name: "camBot",
+    lightValue: 0,
+    lightLowValue: 30,
+    lightHighValue: 255,
+    lightLimitLowValue: 50,
+    lightLimitHighValue: 200,
+    lightBoostTime: 30,
+    lightBoostTimeMax: 30,
+    Servo1Value: 0,
+    Servo1LowValue: -30,
+    Servo1HighValue: 150,
+    Servo1RawValue: 4760,
+    Servo2Value: 0,
+    Servo2LowValue: -30,
+    Servo2HighValue: 150,
+    Servo2RawValue: 0,
+    Version: "V1.00"
   };
 
-  setInterval(() => {
-    if (streamRunning && (!photo.complete || photo.naturalWidth === 0)) loadStream();
-  }, 10000);
+  /* ── Network send ── */
+  const UPDATE_INTERVAL = 50;
+  let lastSendTime  = 0;
+  let retryTimeout  = null;
 
-  /* ============= CREATE SLIDERS ============= */
-  const slidersContainer = document.getElementById("sliders");
+  let joystickActive   = false;
+  let zeroSendCount    = 0;
+  const ZERO_SEND_MAX  = 10;
+  let heartbeatTimer   = null;
 
-  ["A","B","C","D","E"].forEach(letter => {
-    const containerDiv = document.createElement("div");
-    containerDiv.className = "slider-container";
-
-    const label = document.createElement("label");
-    label.id = "label"+letter;
-    label.textContent = letter;
-
-    const row = document.createElement("div");
-    row.className = "slider-row";
-
-    const input = document.createElement("input");
-    input.type = "range";
-    input.min = -127;
-    input.max = 127;
-    input.value = 0;
-    input.dataset.for = letter;
-
-    const value = document.createElement("div");
-    value.className = "slider-value";
-    value.textContent = "0";
-    if(letter === "A") input.value = 100;
-
-    input.addEventListener("input", () => {
-      sliderValues[letter] = parseInt(input.value);
-      value.textContent = input.value;
-      sendData(false);
-    });
-
-    row.appendChild(input);
-    row.appendChild(value);
-    containerDiv.appendChild(label);
-    containerDiv.appendChild(row);
-    slidersContainer.appendChild(containerDiv);
-  });
-
-  /* ============= DRAW JOYSTICK ============= */
-  function drawJoystick() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const center = { x: canvas.width/2, y: canvas.height/2 };
-
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, LIMIT_RADIUS, 0, Math.PI*2);
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(center.x + stick.x, center.y + stick.y, STICK_RADIUS, 0, Math.PI*2);
-    ctx.fillStyle = STICK_COLOR;
-    ctx.fill();
+  function _doSend() {
+    fetch(`/action?ml=${cmd_ml}&mr=${cmd_mr}&light=${cmd_light}` +
+          `&servo1=${cmd_servo1}&servo2=${cmd_servo2}`)
+      .catch(() => {});
   }
 
-  /* ============= JOYSTICK POSITION MODE ============= */
-  function updateJoystickMode() {
-    const wrapper = document.getElementById("media-wrapper");
-    const overlayActive = document.getElementById("modeToggle").checked;
-
-    canvas.style.width  = "300px";
-    canvas.style.height = "300px";
-
-    if (!overlayActive) {
-      wrapper.classList.remove("side-mode");
-      wrapper.classList.add("normal-mode");
-      canvas.style.position = "static";
-    } else {
-      wrapper.classList.remove("normal-mode");
-      wrapper.classList.add("side-mode");
-      canvas.style.position = "absolute";
-    }
-    drawJoystick();
-  }
-
-  /* ============= UPDATE STICK ============= */
-  function updateStick(clientX, clientY) {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width  / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const xPos = (clientX - rect.left) * scaleX;
-    const yPos = (clientY - rect.top)  * scaleY;
-    const center = { x: canvas.width/2, y: canvas.height/2 };
-
-    let x = xPos - center.x;
-    let y = yPos - center.y;
-
-    stick = { x, y };
-    sendData();
-    drawJoystick();
-  }
-
-  function resetStick() {
-    dragging = false;
-    stick = { x:0, y:0 };
-    sendData(true);
-    drawJoystick();
-  }
-
-  /* ============= AXIS CALCULATION ============= */
-  function expo(val, factor) {
-    return Math.sin(val * (Math.PI / 2)) * factor;
-  }
-
-  function calculateAxis(x, y) {
-    x = 150 * expo(x / 150, STICK_X_EXPO_FACTOR);
-    y = 150 * expo(y / 150, STICK_Y_EXPO_FACTOR);
-    const dist = Math.hypot(x, y);
-    if (dist <= DEADZONE_RADIUS) return { x:0, y:0 };
-    const scale = (dist - DEADZONE_RADIUS) / (LIMIT_RADIUS - DEADZONE_RADIUS);
-    return {
-      x: Math.round((x / dist) * scale * MAX_VALUE),
-      y: Math.round((y / dist) * -scale * MAX_VALUE)
-    };
-  }
-
-  /* ============= SEND DATA ============= */
-  let retryTimeout = null;
-  function sendData(force=false) {
+  function sendData(force = false) {
     const now = Date.now();
-    if (!force && now - lastSendTime < UPDATE_INTERVAL) {
+    if (!force && (now - lastSendTime) < UPDATE_INTERVAL) {
       if (!retryTimeout) {
-        retryTimeout = setTimeout(() => { sendData(false); },
+        retryTimeout = setTimeout(() => { retryTimeout = null; sendData(false); },
           UPDATE_INTERVAL - (now - lastSendTime));
       }
       return;
     }
     if (retryTimeout) { clearTimeout(retryTimeout); retryTimeout = null; }
     lastSendTime = now;
-
-    const axis = calculateAxis(stick.x, stick.y);
-    fetch(`/action?x=${axis.x}&y=${axis.y}` +
-          `&a=${sliderValues.A}&b=${sliderValues.B}&c=${sliderValues.C}` +
-          `&d=${sliderValues.D}&e=${sliderValues.E}`)
-          .catch(()=>{});
+    _doSend();
   }
 
-  /* ============= TOKEN PARSER ============= */
-  function parseTokens(tokenString) {
-    const regex = /([A-E]|Name)="([^"]*)"/g;
-    let match;
-    while ((match = regex.exec(tokenString)) !== null) {
-      const key   = match[1];
-      const value = match[2];
-      if (key === "Name") {
-        titleElement.textContent = "HackFFM-Bot: " + value;
-        document.title = "HackFFM-Bot: " + value;
-        if (!roboter_name_set) roboter_name_set = true;
+  function heartbeatTick() {
+    if (joystickActive) {
+      _doSend();
+    } else {
+      if (zeroSendCount < ZERO_SEND_MAX) {
+        _doSend();
+        zeroSendCount++;
       } else {
-        const labelElement = document.getElementById("label" + key);
-        if (labelElement) labelElement.textContent = value;
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
       }
     }
   }
 
-  /* ============= INFO UPDATE ============= */
+  function startHeartbeat() {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(heartbeatTick, 1000);
+  }
+
+  /* ── /info polling ── */
+  const titleElement = document.getElementById("title");
+  let roboter_name_set = false;
+
+  function parseTokens(tokenString) {
+    const regex = /([A-Za-z0-9]+)="([^"]*)"/g;
+    let match;
+    while ((match = regex.exec(tokenString)) !== null) {
+      const key   = match[1];
+      const value = match[2];
+      if (robotState.hasOwnProperty(key)) {
+        const numVal = parseInt(value);
+        robotState[key] = !isNaN(numVal) ? numVal : value;
+      }
+    }
+    applyParsedState();
+  }
+
+  function applyParsedState() {
+    titleElement.textContent = "HackFFM-Bot: " + robotState.Name;
+    document.title           = "HackFFM-Bot: " + robotState.Name;
+    roboter_name_set = true;
+    document.getElementById("version-display").textContent = robotState.Version;
+  }
+
   async function updateInfo() {
     try {
-      const res = await fetch('/info');
-      const txt = await res.text();
+      const res  = await fetch('/info');
+      const txt  = await res.text();
       const parts = txt.split("|");
       document.getElementById("info").textContent = parts[0].trim();
       if (parts.length > 1) parseTokens(parts[1]);
@@ -485,252 +475,697 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     setTimeout(updateInfo, 1000);
   }
 
-  /* ============= INPUT EVENTS ============= */
-  canvas.addEventListener("mousedown", e => { dragging = true; updateStick(e.clientX, e.clientY); });
-  canvas.addEventListener("mousemove", e => { if (dragging) updateStick(e.clientX, e.clientY); });
-  window.addEventListener("mouseup", resetStick);
+  /* start info polling immediately */
+  updateInfo();
+  </script>
 
-  canvas.addEventListener("touchstart", e => {
-    e.preventDefault(); dragging = true;
-    updateStick(e.touches[0].clientX, e.touches[0].clientY);
-  }, { passive:false });
+  <!-- ============================================================
+       JS BLOCK 1 — STREAM AREA + JOYSTICK
+       Owns: stream start/stop, placeholder canvas, photo scaling,
+             joystick canvas drawing & input, overlay/normal mode.
+       Exposes (called by Gamepad block):
+         • setStickFromGamepad(nx, ny)
+         • triggerStickRelease()
+  ============================================================ -->
+  <script>
+  (function() {   /* IIFE so local vars don't leak */
 
-  canvas.addEventListener("touchmove", e => {
-    e.preventDefault();
-    if (dragging) updateStick(e.touches[0].clientX, e.touches[0].clientY);
-  }, { passive:false });
+    /* ── Joystick constants ── */
+    const JOY_W        = 300;
+    const JOY_H        = 300;
+    const STICK_RADIUS = 28;
+    let   STICK_COLOR  = "rgba(255,165,0,0.7)";
 
-  canvas.addEventListener("touchend", resetStick);
+    const joystickCanvas = document.getElementById("joystick");
+    const ctx            = joystickCanvas.getContext("2d");
+    let   stick          = { x: 0, y: 0 };
 
-  document.getElementById('media-wrapper').addEventListener('click', () => {
-    updateJoystickMode();
-  });
+    /* ── Compute motor values from stick position ── */
+    function updateCmdFromStick() {
+      const nx =  stick.x / (JOY_W / 2);
+      const ny = -stick.y / (JOY_H / 2);
 
-  /* ============= RECONNECT / RESTART ============= */
-  document.getElementById('btn-reconnect').addEventListener('click', () => {
-    fetch('/action?reconnect=1', { method: 'GET' });
-  });
-  document.getElementById('btn-restart').addEventListener('click', () => {
-    fetch('/action?restart=1', { method: 'GET' });
-  });
+      const speed = ny;
+      const turn  = nx;
+      let   ml    = Math.round((speed + turn) * 255);
+      let   mr    = Math.round((speed - turn) * 255);
+      ml = Math.max(-255, Math.min(255, ml));
+      mr = Math.max(-255, Math.min(255, mr));
 
-  /* ============= GAMEPAD ============= */
-  const gpdsel_gamepadSelect  = document.getElementById('gpdsel_gamepadSelect');
-  const gpdsel_xAxisSelect    = document.getElementById('gpdsel_xAxis');
-  const gpdsel_yAxisSelect    = document.getElementById('gpdsel_yAxis');
-  const gpdsel_invertX        = document.getElementById('gpdsel_invertX');
-  const gpdsel_invertY        = document.getElementById('gpdsel_invertY');
-  const gpdsel_axesDisplay    = document.getElementById('gpdsel_axesDisplay');
-  const gpdsel_xVal           = document.getElementById('gpdsel_xVal');
-  const gpdsel_yVal           = document.getElementById('gpdsel_yVal');
+      cmd_ml = ml;
+      cmd_mr = mr;
 
-  let selectedGamepadIndex    = null;
-  let lastGamepadButtons      = null;
-  let servo_up_index          = null;
-  let servo_down_index        = null;
-  let gpdsel_activityTimeout  = null;
-  let searching               = false;
-  let searchingServoUP        = false;
-  let searchingServoDOWN      = false;
-
-  function format_fix2(v) { return parseFloat(v).toFixed(2); }
-
-  function gpdsel_populateGamepads() {
-    const gamepads = navigator.getGamepads();
-    gpdsel_gamepadSelect.innerHTML = '';
-    const optdefault = document.createElement('option');
-    optdefault.value = -1;
-    optdefault.textContent = "No Gamepad";
-    gpdsel_gamepadSelect.appendChild(optdefault);
-    for (let i = 0; i < gamepads.length; i++) {
-      if (gamepads[i]) {
-        const opt = document.createElement('option');
-        opt.value = i;
-        opt.textContent = `${i}: ${gamepads[i].id}`;
-        gpdsel_gamepadSelect.appendChild(opt);
-      }
-    }
-  }
-
-  function gpdsel_activityTimeoutFunction() {
-    gpdsel_activityTimeout = null;
-    STICK_COLOR = "rgba(255,165,0,0.3)";
-    stick = { x: 0, y: 0 };
-    sendData(true);
-    drawJoystick();
-  }
-
-  function gpdsel_update() {
-    if (selectedGamepadIndex === null) return;
-    const gamepads = navigator.getGamepads();
-    const gp = gamepads[selectedGamepadIndex];
-    if (!gp) return;
-
-    if (servo_up_index !== null && gp.buttons[servo_up_index] && gp.buttons[servo_up_index].pressed) {
-      sliderValues.B = Math.min(127, (sliderValues.B || 0) + 5);
-      sendData(true);
-    }
-    if (servo_down_index !== null && gp.buttons[servo_down_index] && gp.buttons[servo_down_index].pressed) {
-      sliderValues.B = Math.max(-127, (sliderValues.B || 0) - 5);
-      sendData(true);
+      document.getElementById('joy-coords').textContent =
+        `x:${nx.toFixed(2)} y:${ny.toFixed(2)}   ml:${cmd_ml} mr:${cmd_mr}`;
     }
 
-    const axes = gp.axes;
-    gpdsel_axesDisplay.textContent = axes.map((v, i) => `A${i}: ${format_fix2(v)}`).join(' | ');
+    /* ── Draw joystick canvas ── */
+    function drawJoystick() {
+      ctx.clearRect(0, 0, JOY_W, JOY_H);
+      const cx = JOY_W / 2, cy = JOY_H / 2;
 
-    let x = axes[gpdsel_xAxisSelect.value] || 0;
-    let y = axes[gpdsel_yAxisSelect.value] || 0;
-    if (gpdsel_invertX.checked) x *= -1;
-    if (gpdsel_invertY.checked) y *= -1;
-    gpdsel_xVal.textContent = format_fix2(x);
-    gpdsel_yVal.textContent = format_fix2(y);
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, JOY_W, JOY_H);
 
-    if ((Math.abs(x) > 0.1) || (Math.abs(y) > 0.1)) {
-      if (gpdsel_activityTimeout !== null) {
-        clearTimeout(gpdsel_activityTimeout);
-        gpdsel_activityTimeout = null;
-      }
-      gpdsel_activityTimeout = setTimeout(gpdsel_activityTimeoutFunction, 8000);
-      STICK_COLOR = "rgba(255,0,165,0.3)";
+      ctx.strokeStyle = "rgba(255,255,255,0.4)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0, 0, JOY_W, JOY_H);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.15)";
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx, 0);   ctx.lineTo(cx, JOY_H); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,  cy);  ctx.lineTo(JOY_W, cy); ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(cx + stick.x, cy + stick.y, STICK_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = STICK_COLOR;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.6)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
-    if (gpdsel_activityTimeout !== null) {
-      stick = { x: x * LIMIT_RADIUS, y: y * LIMIT_RADIUS };
+
+    function clampStick(x, y) {
+      const hw = JOY_W / 2, hh = JOY_H / 2;
+      return {
+        x: Math.max(-hw, Math.min(hw, x)),
+        y: Math.max(-hh, Math.min(hh, y))
+      };
+    }
+
+    /* ── Joystick pointer events ── */
+    let activePointerId = null;
+
+    function onPointerDown(e) {
+      joystickCanvas.setPointerCapture(e.pointerId);
+      activePointerId = e.pointerId;
+      joystickActive  = true;
+      zeroSendCount   = 0;
+      STICK_COLOR     = "rgba(255,165,0,0.9)";
+      startHeartbeat();
+
+      const rect = joystickCanvas.getBoundingClientRect();
+      stick = clampStick(e.clientX - rect.left - JOY_W / 2,
+                         e.clientY - rect.top  - JOY_H / 2);
+      updateCmdFromStick();
       sendData(true);
       drawJoystick();
     }
-  }
 
-  /* --- Cookie helpers --- */
-  function setCookie(name, value, days) {
-    document.cookie = name + "=" + value +
-      (days ? "; max-age=" + days * 86400 : "") + "; path=/";
-  }
-
-  function getCookie(cname) {
-    const name = cname + "=";
-    const ca = decodeURIComponent(document.cookie).split(';');
-    for (let c of ca) {
-      c = c.trimStart();
-      if (c.indexOf(name) === 0) return c.substring(name.length);
+    function onPointerMove(e) {
+      if (e.pointerId !== activePointerId) return;
+      const rect = joystickCanvas.getBoundingClientRect();
+      stick = clampStick(e.clientX - rect.left - JOY_W / 2,
+                         e.clientY - rect.top  - JOY_H / 2);
+      updateCmdFromStick();
+      sendData(false);
+      drawJoystick();
     }
-    return "";
-  }
 
-  /* --- Search gamepad --- */
-  const search_gamepad_button            = document.getElementById("searchGamepad");
-  const search_gamepad_output            = document.getElementById("output");
-  const search_gamepad_button_servo_up   = document.getElementById("searchGamepadServoUP");
-  const search_gamepad_output_servo_up   = document.getElementById("outputGamepadServoUP");
-  const search_gamepad_button_servo_down = document.getElementById("searchGamepadServoDOWN");
-  const search_gamepad_output_servo_down = document.getElementById("outputGamepadServoDOWN");
-
-  search_gamepad_button.addEventListener("click", () => {
-    if (!searching) {
-      lastGamepadButtons = null;
-      selectedGamepadIndex = null;
-      searching = true;
-      search_gamepad_output.textContent = "Press any button on your gamepad...";
-      requestAnimationFrame(checkGamepad);
-    } else {
-      searching = false;
-      search_gamepad_output.textContent = "No gamepad selected";
+    function onPointerUp(e) {
+      if (e.pointerId !== activePointerId) return;
+      activePointerId = null;
+      joystickActive  = false;
+      zeroSendCount   = 0;
+      STICK_COLOR     = "rgba(255,165,0,0.7)";
+      stick           = { x: 0, y: 0 };
+      cmd_ml = 0; cmd_mr = 0;
+      updateCmdFromStick();
+      sendData(true);
+      drawJoystick();
+      startHeartbeat();
     }
-  });
 
-  search_gamepad_button_servo_up.addEventListener("click", () => {
-    if (selectedGamepadIndex === null) {
-      search_gamepad_output_servo_up.textContent = "Select a gamepad first!";
-      return;
+    joystickCanvas.addEventListener("pointerdown", onPointerDown);
+    joystickCanvas.addEventListener("pointermove", onPointerMove);
+    joystickCanvas.addEventListener("pointerup",   onPointerUp);
+    joystickCanvas.addEventListener("pointercancel", onPointerUp);
+
+    /* ── Public API for Gamepad block ── */
+    let gamepadActivityTimeout = null;
+
+    window.setStickFromGamepad = function(nx, ny) {
+      /* nx, ny in [-1, +1]; y-axis: positive = forward */
+      if (gamepadActivityTimeout) { clearTimeout(gamepadActivityTimeout); }
+      gamepadActivityTimeout = setTimeout(() => {
+        gamepadActivityTimeout = null;
+        STICK_COLOR = "rgba(255,165,0,0.7)";
+        stick = { x: 0, y: 0 };
+        updateCmdFromStick();
+        sendData(true);
+        drawJoystick();
+      }, 8000);
+
+      STICK_COLOR = "rgba(255,0,165,0.5)";
+      stick = {
+        x:  nx * (JOY_W / 2),
+        y: -ny * (JOY_H / 2)
+      };
+      updateCmdFromStick();
+      sendData(true);
+      drawJoystick();
+    };
+
+    window.triggerStickRelease = function() {
+      if (gamepadActivityTimeout) { clearTimeout(gamepadActivityTimeout); gamepadActivityTimeout = null; }
+      STICK_COLOR = "rgba(255,165,0,0.7)";
+      stick = { x: 0, y: 0 };
+      updateCmdFromStick();
+      sendData(true);
+      drawJoystick();
+    };
+
+    /* ── Joystick overlay mode toggle ── */
+    const joyWrapper  = document.getElementById("joystick-wrapper");
+    const streamArea  = document.getElementById("stream-area");
+
+    function updateJoystickMode() {
+      const overlay = document.getElementById("modeToggle").checked;
+      if (overlay) {
+        if (!streamArea.contains(joyWrapper)) streamArea.appendChild(joyWrapper);
+        joyWrapper.classList.remove("normal-pos");
+        joyWrapper.style.position = "absolute";
+      } else {
+        const mediaWrapper = document.getElementById("media-wrapper");
+        mediaWrapper.appendChild(joyWrapper);
+        joyWrapper.classList.add("normal-pos");
+        joyWrapper.style.position = "static";
+      }
+      drawJoystick();
     }
-    searchingServoUP = true;
-    search_gamepad_output_servo_up.textContent = "Press the UP button...";
-    requestAnimationFrame(checkGamepadServoUP);
-  });
+    document.getElementById("modeToggle").addEventListener("change", updateJoystickMode);
 
-  search_gamepad_button_servo_down.addEventListener("click", () => {
-    if (selectedGamepadIndex === null) {
-      search_gamepad_output_servo_down.textContent = "Select a gamepad first!";
-      return;
+    /* ── Stream placeholder ── */
+    const placeholder = document.getElementById("stream-placeholder");
+    placeholder.width  = 640;
+    placeholder.height = 480;
+    (function drawPlaceholder() {
+      const pc = placeholder.getContext("2d");
+      pc.fillStyle = "#000";
+      pc.fillRect(0, 0, 640, 480);
+      pc.strokeStyle = "#1a1a1a";
+      pc.lineWidth = 1;
+      for (let x = 0; x <= 640; x += 40) {
+        pc.beginPath(); pc.moveTo(x, 0); pc.lineTo(x, 480); pc.stroke();
+      }
+      for (let y = 0; y <= 480; y += 40) {
+        pc.beginPath(); pc.moveTo(0, y); pc.lineTo(640, y); pc.stroke();
+      }
+      pc.fillStyle = "#333";
+      pc.font = "18px monospace";
+      pc.textAlign = "center";
+      pc.fillText("No stream", 320, 235);
+      pc.fillText("640 × 480", 320, 258);
+    })();
+
+    /* ── Stream start/stop + scaling ── */
+    const photo     = document.getElementById("photo");
+    const scaleClip = document.getElementById("photo-scale-clip");
+
+    const TARGET_W = 640;
+    const TARGET_H = 480;
+
+    let streamRunning    = false;
+    let streamRetryDelay = 1000;
+
+    function applyPhotoScale() {
+      const userScale = parseFloat(document.getElementById('streamScale').value);
+      const natW = photo.naturalWidth  || TARGET_W;
+      const natH = photo.naturalHeight || TARGET_H;
+
+      const scaleToFit = Math.max(TARGET_W / natW, TARGET_H / natH);
+      const finalScale = Math.max(scaleToFit, userScale);
+
+      photo.style.transform      = `scale(${finalScale})`;
+      photo.style.transformOrigin = "top left";
+
+      const displayW = Math.round(natW * finalScale);
+      const displayH = Math.round(natH * finalScale);
+
+      scaleClip.style.width  = displayW + "px";
+      scaleClip.style.height = displayH + "px";
+
+      streamArea.style.width  = Math.max(TARGET_W, displayW) + "px";
+      streamArea.style.height = Math.max(TARGET_H, displayH) + "px";
     }
-    searchingServoDOWN = true;
-    search_gamepad_output_servo_down.textContent = "Press the DOWN button...";
-    requestAnimationFrame(checkGamepadServoDOWN);
-  });
 
-  function checkGamepad() {
-    if (!searching) return;
-    const gamepads = navigator.getGamepads();
-    for (let i = 0; i < gamepads.length; i++) {
-      const gp = gamepads[i];
-      if (!gp) continue;
-      for (let j = 0; j < gp.buttons.length; j++) {
-        if (gp.buttons[j].pressed) {
-          searching = false;
-          selectedGamepadIndex = i;
-          search_gamepad_output.textContent = `Gamepad ${i}: ${gp.id} (btn ${j})`;
-          setCookie("gamepad", i, 30);
-          return;
+    document.getElementById('streamScale').addEventListener('change', applyPhotoScale);
+
+    photo.addEventListener('load', () => {
+      placeholder.style.display = "none";
+      scaleClip.style.display   = "inline-block";
+      streamRetryDelay = 1000;
+      applyPhotoScale();
+    });
+    photo.addEventListener('error', () => {
+      scaleClip.style.display   = "none";
+      placeholder.style.display = "block";
+      if (streamRunning) {
+        setTimeout(() => { if (streamRunning) photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`; },
+          streamRetryDelay);
+        streamRetryDelay = Math.min(streamRetryDelay * 2, 10000);
+      }
+    });
+
+    const btnStreamToggle = document.getElementById('btn-stream-toggle');
+
+    function startStream() {
+      streamRunning = true;
+      streamRetryDelay = 1000;
+      photo.src = `${window.location.origin}:81/stream?t=${Date.now()}`;
+      btnStreamToggle.textContent = '⏹ Stop stream';
+      btnStreamToggle.classList.add('running');
+    }
+
+    function stopStream() {
+      streamRunning = false;
+      photo.src = '';
+      scaleClip.style.display   = "none";
+      placeholder.style.display = "block";
+      btnStreamToggle.textContent = '▶ Start stream';
+      btnStreamToggle.classList.remove('running');
+    }
+
+    btnStreamToggle.addEventListener('click', () => {
+      if (streamRunning) stopStream(); else startStream();
+    });
+
+    /* auto-start stream */
+    startStream();
+
+    /* initial draw */
+    drawJoystick();
+
+  })(); /* end IIFE block 1 */
+  </script>
+
+  <!-- ============================================================
+       JS BLOCK 2 — DRIVE & LIGHT CONTROLS
+       Owns: light slider, servo1 slider, servo2 slider.
+       Writes: cmd_light, cmd_servo1, cmd_servo2 (shared layer).
+  ============================================================ -->
+  <script>
+  (function() {
+
+    const sliderLight  = document.getElementById("slider-light");
+    const sliderServo1 = document.getElementById("slider-servo1");
+    const sliderServo2 = document.getElementById("slider-servo2");
+    const valLight     = document.getElementById("val-light");
+    const valServo1    = document.getElementById("val-servo1");
+    const valServo2    = document.getElementById("val-servo2");
+
+    sliderLight.addEventListener("input", () => {
+      const pct = parseInt(sliderLight.value);
+      valLight.textContent = pct + "%";
+      cmd_light = Math.round(pct / 100 * 255);
+      sendData(false);
+    });
+
+    sliderServo1.addEventListener("input", () => {
+      cmd_servo1 = parseInt(sliderServo1.value);
+      valServo1.textContent = cmd_servo1;
+      sendData(false);
+    });
+
+    sliderServo2.addEventListener("input", () => {
+      cmd_servo2 = parseInt(sliderServo2.value);
+      valServo2.textContent = cmd_servo2;
+      sendData(false);
+    });
+
+  })(); /* end IIFE block 2 */
+  </script>
+
+<!-- ============================================================
+       JS BLOCK 3 — GAMEPAD
+       Owns: gamepad detection, axis mapping, button mapping.
+       Output (only via public API, no direct variable writes):
+         • setStickFromGamepad(nx, ny)  → Block 1
+         • triggerStickRelease()        → Block 1
+  ============================================================ -->
+  <script>
+  (function() {
+
+    /* ── DOM refs ── */
+    const gpdsel_gamepadSelect = document.getElementById('gpdsel_gamepadSelect');
+    const gpdsel_xAxisSelect   = document.getElementById('gpdsel_xAxis');
+    const gpdsel_yAxisSelect   = document.getElementById('gpdsel_yAxis');
+    const gpdsel_invertX       = document.getElementById('gpdsel_invertX');
+    const gpdsel_invertY       = document.getElementById('gpdsel_invertY');
+    const gpdsel_axesDisplay   = document.getElementById('gpdsel_axesDisplay');
+    const gpdsel_xVal          = document.getElementById('gpdsel_xVal');
+    const gpdsel_yVal          = document.getElementById('gpdsel_yVal');
+
+    const search_gamepad_button              = document.getElementById('searchGamepad');
+    const search_gamepad_output              = document.getElementById('output');
+    const search_gamepad_button_servo_1      = document.getElementById('searchGamepadServo1');
+    const search_gamepad_output_servo_1      = document.getElementById('outputGamepadServo1');
+    const search_gamepad_button_servo_2      = document.getElementById('searchGamepadServo2');
+    const search_gamepad_output_servo_2      = document.getElementById('outputGamepadServo2');
+    const search_gamepad_button_low_light    = document.getElementById('searchGamepadLowLight');
+    const search_gamepad_output_low_light    = document.getElementById('outputGamepadLowLight');
+    const search_gamepad_button_flash_light  = document.getElementById('searchGamepadFlashLight');
+    const search_gamepad_output_flash_light  = document.getElementById('outputGamepadFlashLight');
+
+    /* ── State ── */
+    let selectedGamepadIndex   = null;
+    let lastGamepadButtons     = null;
+    let servo_1_index          = null;
+    let servo_2_index          = null;
+    let low_light_index        = null;
+    let flash_light_index      = null;
+    let gpdsel_activityTimeout = null;
+    let searching              = false;
+    let searchingServo1        = false;
+    let searchingServo2        = false;
+    let searchingLowLight      = false;
+    let searchingFlashLight    = false;
+
+    /* Flag to suppress saving during initial load */
+    let configLoaded           = false;
+
+    function format_fix2(v) { return parseFloat(v).toFixed(2); }
+
+    /* ── Config persistence ──
+       Order: xAxisIdx, yAxisIdx, invertX, invertY,
+              servo_1_index, servo_2_index, low_light_index, flash_light_index
+    */
+    function saveConfig() {
+      if (!configLoaded) return;  /* don't save while loading */
+      const parts = [
+        gpdsel_xAxisSelect.value !== '' ? gpdsel_xAxisSelect.value : '0',
+        gpdsel_yAxisSelect.value !== '' ? gpdsel_yAxisSelect.value : '0',
+        gpdsel_invertX.checked ? '1' : '0',
+        gpdsel_invertY.checked ? '1' : '0',
+        servo_1_index     !== null ? servo_1_index     : '-1',
+        servo_2_index     !== null ? servo_2_index     : '-1',
+        low_light_index   !== null ? low_light_index   : '-1',
+        flash_light_index !== null ? flash_light_index : '-1'
+      ];
+      const url = '/action?configDataWrite=0,' + parts.join(',');
+      fetch(url).catch(err => console.warn('configDataWrite failed:', err));
+    }
+
+    function loadConfig() {
+      fetch('/action?configDataRead=0')
+        .then(r => r.text())
+        .then(txt => {
+          const parts = txt.trim().split(',');
+          if (parts.length >= 8) {
+            const xAxis    = parseInt(parts[0]);
+            const yAxis    = parseInt(parts[1]);
+            const invX     = parts[2] === '1';
+            const invY     = parts[3] === '1';
+            const s1       = parseInt(parts[4]);
+            const s2       = parseInt(parts[5]);
+            const lowL     = parseInt(parts[6]);
+            const flashL   = parseInt(parts[7]);
+
+            if (!isNaN(xAxis)) gpdsel_xAxisSelect.value = xAxis;
+            if (!isNaN(yAxis)) gpdsel_yAxisSelect.value = yAxis;
+            gpdsel_invertX.checked = invX;
+            gpdsel_invertY.checked = invY;
+
+            if (!isNaN(s1) && s1 >= 0) {
+              servo_1_index = s1;
+              search_gamepad_output_servo_1.textContent = 'Button to toggle Servo 1: ' + s1;
+            }
+            if (!isNaN(s2) && s2 >= 0) {
+              servo_2_index = s2;
+              search_gamepad_output_servo_2.textContent = 'Button to toggle Servo 2: ' + s2;
+            }
+            if (!isNaN(lowL) && lowL >= 0) {
+              low_light_index = lowL;
+              search_gamepad_output_low_light.textContent = 'Button to toggle Low Light: ' + lowL;
+            }
+            if (!isNaN(flashL) && flashL >= 0) {
+              flash_light_index = flashL;
+              search_gamepad_output_flash_light.textContent = 'Button to turn on Flash Light: ' + flashL;
+            }
+          }
+        })
+        .catch(err => console.warn('configDataRead failed:', err))
+        .finally(() => { configLoaded = true; });
+    }
+
+    /* Trigger save when axis/invert UI controls change */
+    gpdsel_xAxisSelect.addEventListener('change', saveConfig);
+    gpdsel_yAxisSelect.addEventListener('change', saveConfig);
+    gpdsel_invertX.addEventListener('change',     saveConfig);
+    gpdsel_invertY.addEventListener('change',     saveConfig);
+
+    /* ── Rebuild the gamepad dropdown from currently connected gamepads ── */
+    function rebuildGamepadDropdown() {
+      const gamepads = navigator.getGamepads();
+      gpdsel_gamepadSelect.innerHTML = '<option value="">-- select --</option>';
+      for (let i = 0; i < gamepads.length; i++) {
+        if (gamepads[i]) {
+          const opt = document.createElement('option');
+          opt.value = i;
+          opt.textContent = gamepads[i].id || ('Gamepad ' + i);
+          if (i === selectedGamepadIndex) opt.selected = true;
+          gpdsel_gamepadSelect.appendChild(opt);
         }
       }
     }
-    requestAnimationFrame(checkGamepad);
-  }
 
-  function checkGamepadServoUP() {
-    if (!searchingServoUP) return;
-    const gp = navigator.getGamepads()[selectedGamepadIndex];
-    if (!gp) return;
-    for (let j = 0; j < gp.buttons.length; j++) {
-      if (gp.buttons[j].pressed) {
-        searchingServoUP = false;
-        servo_up_index = j;
-        search_gamepad_output_servo_up.textContent = `Servo UP: button ${j}`;
-        setCookie("gamepadBtnUp", j, 30);
-        return;
+    /* User picks from dropdown manually */
+    gpdsel_gamepadSelect.addEventListener('change', () => {
+      const v = gpdsel_gamepadSelect.value;
+      if (v === '') {
+        selectedGamepadIndex = null;
+        search_gamepad_output.textContent = 'No gamepad selected';
+      } else {
+        selectedGamepadIndex = parseInt(v);
+        const gp = navigator.getGamepads()[selectedGamepadIndex];
+        search_gamepad_output.textContent = 'Selected: ' + (gp ? gp.id : 'Gamepad ' + selectedGamepadIndex);
       }
-    }
-    requestAnimationFrame(checkGamepadServoUP);
-  }
+      /* NOTE: gamepad index/name intentionally NOT persisted */
+    });
 
-  function checkGamepadServoDOWN() {
-    if (!searchingServoDOWN) return;
-    const gp = navigator.getGamepads()[selectedGamepadIndex];
-    if (!gp) return;
-    for (let j = 0; j < gp.buttons.length; j++) {
-      if (gp.buttons[j].pressed) {
-        searchingServoDOWN = false;
-        servo_down_index = j;
-        search_gamepad_output_servo_down.textContent = `Servo DOWN: button ${j}`;
-        setCookie("gamepadBtnDown", j, 30);
-        return;
+    /* Keep dropdown fresh when browser adds/removes gamepads */
+    window.addEventListener('gamepadconnected',    rebuildGamepadDropdown);
+    window.addEventListener('gamepaddisconnected', rebuildGamepadDropdown);
+
+    /* ── Main gamepad poll loop ── */
+    function gamepadLoop() {
+      const gamepads = navigator.getGamepads();
+      if (selectedGamepadIndex === null) { requestAnimationFrame(gamepadLoop); return; }
+
+      const gp = gamepads[selectedGamepadIndex];
+      if (!gp)                           { requestAnimationFrame(gamepadLoop); return; }
+
+      /* update axes display */
+      const axes = gp.axes;
+      gpdsel_axesDisplay.textContent = axes.map((v, i) => 'A' + i + ':' + format_fix2(v)).join('  ');
+
+      /* read selected axes */
+      let gx = axes[parseInt(gpdsel_xAxisSelect.value)] || 0;
+      let gy = axes[parseInt(gpdsel_yAxisSelect.value)] || 0;
+      if (gpdsel_invertX.checked) gx *= -1;
+      if (gpdsel_invertY.checked) gy *= -1;
+      gpdsel_xVal.textContent = format_fix2(gx);
+      gpdsel_yVal.textContent = format_fix2(gy);
+
+      /* activity detection → forward to Block 1 via public API */
+      if (Math.abs(gx) > 0.1 || Math.abs(gy) > 0.1) {
+        if (!gpdsel_activityTimeout) {
+          gpdsel_activityTimeout = setTimeout(() => {
+            gpdsel_activityTimeout = null;
+            window.triggerStickRelease();
+          }, 8000);
+        }
       }
+
+      if (gpdsel_activityTimeout !== null) {
+        window.setStickFromGamepad(gx, gy);
+      }
+
+      /* button handling */
+      const buttons = gp.buttons;
+      if (lastGamepadButtons) {
+        for (let i = 0; i < buttons.length; i++) {
+          const pressed    = buttons[i].pressed;
+          const wasPressed = lastGamepadButtons[i];
+          if (pressed && !wasPressed) {
+            if (i === servo_1_index) {
+              /* TODO: call Block 2 public API, e.g. adjustServo1(+step) */
+            }
+            if (i === servo_2_index) {
+              /* TODO: call Block 2 public API, e.g. adjustServo1(-step) */
+            }
+            if (i === low_light_index) {
+              /* TODO: call Block 2 public API, e.g. toggleLowLight() */
+            }
+            if (i === flash_light_index) {  
+              /* TODO: call Block 2 public API, e.g. toggleFlashLight() */
+            }
+          }
+        }
+      }
+      lastGamepadButtons = buttons.map(b => b.pressed);
+
+      requestAnimationFrame(gamepadLoop);
     }
-    requestAnimationFrame(checkGamepadServoDOWN);
-  }
+    requestAnimationFrame(gamepadLoop);
 
-  /* --- Restore cookies --- */
-  (function restoreCookies() {
-    const gi = getCookie("gamepad");
-    if (gi !== "" && Number(gi) >= 0) selectedGamepadIndex = Number(gi);
-    const bu = getCookie("gamepadBtnUp");
-    if (bu !== "" && Number(bu) >= 0) servo_up_index = Number(bu);
-    const bd = getCookie("gamepadBtnDown");
-    if (bd !== "" && Number(bd) >= 0) servo_down_index = Number(bd);
-  })();
+    /* ── Gamepad search — press any button to auto-detect & select ── */
+    search_gamepad_button.addEventListener('click', () => {
+      searching = true;
+      search_gamepad_output.textContent = 'Press any button on the gamepad...';
+      requestAnimationFrame(checkGamepad);
+    });
 
-  window.addEventListener("gamepadconnected",    gpdsel_populateGamepads);
-  window.addEventListener("gamepaddisconnected", gpdsel_populateGamepads);
-  gpdsel_populateGamepads();
-  setInterval(gpdsel_update, 75);
+    function checkGamepad() {
+      if (!searching) return;
+      const gamepads = navigator.getGamepads();
+      for (let i = 0; i < gamepads.length; i++) {
+        const gp = gamepads[i];
+        if (!gp) continue;
+        for (let j = 0; j < gp.buttons.length; j++) {
+          if (gp.buttons[j].pressed) {
+            searching = false;
+            selectedGamepadIndex = i;
+            search_gamepad_output.textContent = 'Found: ' + gp.id;
+            rebuildGamepadDropdown();          /* update dropdown to show & select it */
+            /* NOTE: gamepad index/name intentionally NOT persisted */
+            return;
+          }
+        }
+      }
+      requestAnimationFrame(checkGamepad);
+    }
 
-  /* ============= INIT ============= */
-  document.getElementById("modeToggle").addEventListener("change", updateJoystickMode);
-  document.getElementById("modeToggle").checked = true;
-  updateJoystickMode();
-  drawJoystick();
-  startStream();   // auto-start on page load
-  updateInfo();
-</script>
+    /* ── Servo 1 search ── */
+    search_gamepad_button_servo_1.addEventListener('click', () => {
+      if (selectedGamepadIndex === null) {
+        search_gamepad_output_servo_1.textContent = 'Select a gamepad first!'; return;
+      }
+      searchingServo1 = true;
+      search_gamepad_output_servo_1.textContent = 'Press the button to toggle Servo 1...';
+      requestAnimationFrame(checkGamepadServo1);
+    });
+
+    function checkGamepadServo1() {
+      if (!searchingServo1) return;
+      const gp = navigator.getGamepads()[selectedGamepadIndex]; if (!gp) return;
+      for (let j = 0; j < gp.buttons.length; j++) {
+        if (gp.buttons[j].pressed) {
+          searchingServo1 = false; servo_1_index = j;
+          search_gamepad_output_servo_1.textContent = 'Button to toggle Servo 1: ' + j;
+          saveConfig();
+          return;
+        }
+      }
+      requestAnimationFrame(checkGamepadServo1);
+    }
+
+    /* ── Servo 2 search ── */
+    search_gamepad_button_servo_2.addEventListener('click', () => {
+      if (selectedGamepadIndex === null) {
+        search_gamepad_output_servo_2.textContent = 'Select a gamepad first!'; return;
+      }
+      searchingServo2 = true;
+      search_gamepad_output_servo_2.textContent = 'Press the button to toggle Servo 2...';
+      requestAnimationFrame(checkGamepadServo2);
+    });
+
+    function checkGamepadServo2() {
+      if (!searchingServo2) return;
+      const gp = navigator.getGamepads()[selectedGamepadIndex]; if (!gp) return;
+      for (let j = 0; j < gp.buttons.length; j++) {
+        if (gp.buttons[j].pressed) {
+          searchingServo2 = false; servo_2_index = j;
+          search_gamepad_output_servo_2.textContent = 'Button to toggle Servo 2: ' + j;
+          saveConfig();
+          return;
+        }
+      }
+      requestAnimationFrame(checkGamepadServo2);
+    }
+
+    /* ── Low Light search ── */
+    search_gamepad_button_low_light.addEventListener('click', () => {
+      if (selectedGamepadIndex === null) {
+        search_gamepad_output_low_light.textContent = 'Select a gamepad first!'; return;
+      }
+      searchingLowLight = true;
+      search_gamepad_output_low_light.textContent = 'Press the button to toggle Low Light...';
+      requestAnimationFrame(checkGamepadLowLight);
+    });
+
+    function checkGamepadLowLight() {
+      if (!searchingLowLight) return;
+      const gp = navigator.getGamepads()[selectedGamepadIndex]; if (!gp) return;
+      for (let j = 0; j < gp.buttons.length; j++) {
+        if (gp.buttons[j].pressed) {
+          searchingLowLight = false; low_light_index = j;
+          search_gamepad_output_low_light.textContent = 'Button to toggle Low Light: ' + j;
+          saveConfig();
+          return;
+        }
+      }
+      requestAnimationFrame(checkGamepadLowLight);
+    }
+
+    /* ── Flash Light search ── */
+    search_gamepad_button_flash_light.addEventListener('click', () => {
+      if (selectedGamepadIndex === null) {
+        search_gamepad_output_flash_light.textContent = 'Select a gamepad first!'; return;
+      }
+      searchingFlashLight = true;
+      search_gamepad_output_flash_light.textContent = 'Press the button to turn on Flash Light...';
+      requestAnimationFrame(checkGamepadFlashLight);
+    });
+
+    function checkGamepadFlashLight() {
+      if (!searchingFlashLight) return;
+      const gp = navigator.getGamepads()[selectedGamepadIndex]; if (!gp) return;
+      for (let j = 0; j < gp.buttons.length; j++) {
+        if (gp.buttons[j].pressed) {
+          searchingFlashLight = false; flash_light_index = j;
+          search_gamepad_output_flash_light.textContent = 'Button to turn on Flash Light: ' + j;
+          saveConfig();
+          return;
+        }
+      }
+      requestAnimationFrame(checkGamepadFlashLight);
+    }
+
+    /* ── Load persisted config on page load ── */
+    loadConfig();
+
+  })(); /* end IIFE block 3 */
+  </script>
+
+
+
+  <!-- ============================================================
+       JS BLOCK 4 — ACTION BUTTONS
+       No dependencies on other blocks; fires simple /action fetches.
+  ============================================================ -->
+  <script>
+  (function() {
+
+    document.getElementById('btn-reconnect').addEventListener('click', () => {
+      fetch('/action?reconnect=1');
+    });
+    document.getElementById('btn-restart').addEventListener('click', () => {
+      fetch('/action?restart=1');
+    });
+    document.getElementById('btn-shutdown').addEventListener('click', () => {
+      window.location.href = '/action?shutdown';
+    });
+    document.getElementById('btn-trigger').addEventListener('click', () => {
+      window.location.href = '/action?trig';
+    });
+    document.getElementById('btn-settings').addEventListener('click', () => {
+      window.location.href = '/settings';
+    });
+
+  })(); /* end IIFE block 4 */
+  </script>
+
 </body>
 </html>
 )rawliteral";

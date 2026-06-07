@@ -4,6 +4,7 @@ static const char* _STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" 
 static const char* _STREAM_BOUNDARY = "\r\n--" PART_BOUNDARY "\r\n";
 static const char* _STREAM_PART = "\r\n--" PART_BOUNDARY "\r\n" "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %d.%06d\r\n\r\n";
 
+bool CameraRunning = false;
 int quality = 20; int prev_quality = 33;
 int fps = 0; int fps_count = 0; 
 int bps = 0; int bps_count = 0;
@@ -46,7 +47,7 @@ static esp_err_t stream_handler(httpd_req_t *req){
   httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
   //httpd_resp_set_hdr(req, "X-Framerate", "60");
 
-  while(OTA_Status < 2){
+  while(CameraRunning){
     uint32_t now = millis();
     if((uint32_t)(now - last_frame_time) < (uint32_t)frame_limit_ms) {
       delay(frame_limit_ms - (uint32_t)(now - last_frame_time));

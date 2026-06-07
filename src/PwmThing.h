@@ -8,6 +8,8 @@ public:
     // Constructor with default parameters
     PwmThing();
 
+    static constexpr int PWMHIGHFREQ = 19531; // 19531;
+
     // Enum for thingType
     enum ThingType {
         pwmOut = 0,       // Standard PWM, 20kHz, 8-bit resolution, 0...255
@@ -23,8 +25,11 @@ public:
     void begin(int pinA, int pinB = -1, ThingType thingType = pwmOut, bool inverted = false, 
       int servoMin = 768, int servoZero = 4760, int servoMax = 9544);
 
-    // Method to set the value
-    void set(int value);
+    // Method to set to lowest power
+    void end();  
+
+    // Method to set the value (0...255 for pwmOut, -255...+255 for halfBridge and servoMotor)
+    void set(int value, bool clearAnimation = true);
 
     // Method to get latest set value
     int get() { return lastValue; }
@@ -32,6 +37,13 @@ public:
     int getDuty() { return lastDuty; }
 
     void printInfo();
+
+    void startAnimation(int animationType, int speed = 2000, int lowValue = 0, int highValue = 255) {
+      animationLowValue = lowValue; animationHighValue = highValue;
+      animationSpeed = speed; this->animationType = animationType;
+    }
+
+    void doAnimation();
 
 //private:
     int pinA;
@@ -46,6 +58,11 @@ public:
     bool logValues = false;
     int lastValue;
     int lastDuty;
+
+    int animationType = 0;
+    int animationLowValue = 0;
+    int animationHighValue = 255;
+    int animationSpeed = 1000; // in milliseconds
 };
 
 #endif // PWMTHING_H

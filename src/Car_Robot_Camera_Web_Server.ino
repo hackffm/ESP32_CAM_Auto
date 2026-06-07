@@ -11,7 +11,7 @@
   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 *********/
 
-const char version_string[] = "V1.1 compiled on " __DATE__ " at " __TIME__;
+const char version_string[] = "V1.12";
 
 #define MOTOR_1_PIN_1    14
 #define MOTOR_1_PIN_2    15
@@ -73,7 +73,6 @@ PwmThing MotorLeft, MotorRight, Servo1, Servo2, WhiteLED, RedLED;
 WiFiMulti wifiMulti;
 
 
-
 // Store data used in PwmThing.begin for Motors and Servos here in an array of a structto be stored in LittleFS and to be used on startup
 struct PwmThingConfig {
   char name[20]; int pinA; int pinB; PwmThing::ThingType thingType; bool inverted;
@@ -90,6 +89,28 @@ PwmThingConfig pwmThingConfigs[numPwmThings] = {
 };
 
 uint32_t lastMotorCommandTime = 0;
+uint32_t powerDownTimer = 0;
+uint32_t powerDownTimeout = 60 * 60000UL; // Power down 30 min
+
+struct LightVariables {
+  // All values are usually 0...255 for 0% to 100% brightness
+  int requestedValue = -1;          // User request goes here, -1 means no request, applied in main loop with limits and timeouts
+  int Value = 0;                    // What the light is currently set to, timeouts and limits are applied to this value, and this is what is actually set on the LED
+  int lowValue = 30;                // User defined value for candle/torch light (no time limit if below limitLowValue)
+  int highValue = 255;              // User defined value for strong brightness (will be time limited)
+  int limitLowValue = 50;           // Unlimited brightness up to this value, above this value, the timeout will apply
+  int limitHighValue = 200;         // Absolute maximum allowed brightness, even for boost, to prevent overheating
+  int boostTime = 30000;            // Available boost time in milliseconds
+  int boostTimeMax = 30000;         // Maximum boost time in milliseconds (e.g. to calculate remaining boost time percentage)
+} LightVars;
+
+struct ServoVariables {
+  // All values -255 ... 255 typically (percentage of PwmThing ServoMin and ServoMax)
+  int requestedValue = -9999;    // User request goes here, -9999 means no request, applied in main loop with limits and timeouts
+  int Value = 0;                 // What the servo is currently set to
+  int lowValue = -30;            // User defined value for one lower position 
+  int highValue = 150;           // User defined value for one higher position
+} Servo1Vars, Servo2Vars;
 
 #define CAMERA_MODEL_AI_THINKER
 //#define CAMERA_MODEL_M5STACK_PSRAM
@@ -103,9 +124,6 @@ uint32_t lastMotorCommandTime = 0;
 #include "settingshtml_intern.h"  // will be replaced if /data/settings.html in LittleFS exists
 
 #include "helper_functions.h"
-
-int32_t  WhiteLedMaxOnTimeMs = 30000; // Prevent LED overheating
-int      WhiteLedTimeoutThresholdValue = 44; // Count down MaxOnTimeMs above this threshold, limit LED to this threshold afterwards
 
 struct CameraConfig {
   int rotation; // 0 = no rotation, 1 = 180° rotation
@@ -296,12 +314,23 @@ static esp_err_t info_handler(httpd_req_t *req){
      infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram());
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, Channel: %d, IP: %s \r\n", 
      current_ssid, WiFi.BSSIDstr().c_str(), WiFi.channel(), current_IP.toString().c_str());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "WiFi RSSI: %d dBm, FPS: %d, kBytes/s: %d, Command/s: %d\r\n", 
-     WiFi.RSSI(), fps, bps/1024, cps);     
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version: %s\r\n", version_string);  
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Avg RSSI: %d dBm, FPS: %d (Limit: %d), Quality: %d, kBytes/s: %d, Command/s: %d\r\n", 
+     current_rssi, fps, 1000/frame_limit_ms, quality, bps/1024, cps);    
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "ML: %d, MR: %d, Powerdown timer: %lu s\r\n", 
+     MotorLeft.get(), MotorRight.get(), (powerDownTimeout - (millis() - powerDownTimer))/1000);      
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version: %s %s, Uptime: %lu s\r\n", version_string, CompileTime, millis() / 1000);  
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", "
-     "B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo1 (%d)\", E=\"Servo2 (%d)\"", 
-     roboter_name, 1000/frame_limit_ms, quality, max(WhiteLedMaxOnTimeMs/1000,0L), Servo1.getDuty(), Servo2.getDuty());
+     "B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo1 (%d)\", E=\"Servo2 (%d)\", ", 
+     roboter_name, 1000/frame_limit_ms, quality, LightVars.boostTime/1000,0, Servo1.getDuty(), Servo2.getDuty());
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "lightValue=\"%d\", lightLowValue=\"%d\", lightHighValue=\"%d\", "
+      "lightLimitLowValue=\"%d\", lightLimitHighValue=\"%d\", lightBoostTime=\"%d\", lightBoostTimeMax=\"%d\", ", 
+     LightVars.Value, LightVars.lowValue, LightVars.highValue, LightVars.limitLowValue, LightVars.limitHighValue, 
+     LightVars.boostTime/1000, LightVars.boostTimeMax/1000);   
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Servo1Value=\"%d\", Servo1LowValue=\"%d\", Servo1HighValue=\"%d\", " 
+      "Servo1RawValue=\"%d\", Servo2Value=\"%d\", Servo2LowValue=\"%d\", Servo2HighValue=\"%d\", Servo2RawValue=\"%d\", ",
+     Servo1Vars.Value, Servo1Vars.lowValue, Servo1Vars.highValue, Servo1.getDuty(), 
+     Servo2Vars.Value, Servo2Vars.lowValue, Servo2Vars.highValue, Servo2.getDuty());
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version=\"%s\", ", version_string);
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -314,14 +343,25 @@ static esp_err_t cors_options_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// HTTP Error (404) Handler - Redirects all requests to the root page
+static esp_err_t http_404_error_handler(httpd_req_t *req, httpd_err_code_t err) {
+    httpd_resp_set_status(req, "303 See Other"); // Set status
+    httpd_resp_set_hdr(req, "Location", "/"); // Redirect to the "/" root directory
+    // iOS requires content in the response to detect a captive portal, simply redirecting is not sufficient.
+    httpd_resp_send(req, "Redirect to the captive portal", HTTPD_RESP_USE_STRLEN);
+    ESP_LOGI(TAG, "Redirecting to root");
+    return ESP_OK;
+}
+
 static esp_err_t cmd_handler(httpd_req_t *req){
   char*  buf;
   size_t buf_len;
   char variable[32] = {0,};
   // Array of char strings "x", "y", "z" for example, to be used as query keys
-  const char* query_keys[] = {"x", "y", "a", "b", "c", "d", "e", "f"};
+  const char* query_keys[] = {"x", "y", "a", "b", "c", "d", "e", "f", "ml", "mr", "light", "servo1", "servo2"};
   int num_keys = sizeof(query_keys) / sizeof(query_keys[0]);
-  static int key_values[8] = {0,0,0,0,0,0,0,0}; // Array to hold the values of the query keys
+  static int key_values[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0}; // Array to hold the values of the query keys
+  int key_values_changed[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0}; // Array to track which keys have changed for performance optimizations
   int res = -1;
   char strbuf[120] = {0,};
   char strbuf2[120] = {0,};
@@ -342,21 +382,50 @@ static esp_err_t cmd_handler(httpd_req_t *req){
       for (int i = 0; i < num_keys; i++) {
         if (httpd_query_key_value(buf, query_keys[i], variable, sizeof(variable)) == ESP_OK) {
           key_values[i] = atoi(variable);
+          key_values_changed[i] = 1; // Mark this key as changed
           res = 0;
           // Serial.printf("Key: %s, Value: %d\n", query_keys[i], key_values[i]);
         } 
       }
-      // query ml and mr for direct motor control
-      if((httpd_query_key_value(buf, "ml", strbuf, sizeof(strbuf)) == ESP_OK) && 
-         (httpd_query_key_value(buf, "mr", strbuf2, sizeof(strbuf2)) == ESP_OK)) {
-        int ml = atoi(strbuf);
-        int mr = atoi(strbuf2);
-        MotorLeft.set(ml);
-        MotorRight.set(mr);
-        lastMotorCommandTime = millis();
-        free(buf);
-        return httpd_resp_send(req, NULL, 0);
-        //Serial.printf("Motor command received - Left: %d, Right: %d\n", ml, mr);
+      if(res == 0) {
+        if(key_values_changed[8] || key_values_changed[9]) { // If x or y changed, update motors
+          int ml = key_values[8]; // x + y for left motor
+          int mr = key_values[9]; // x - y for right motor
+          MotorLeft.set(ml);
+          MotorRight.set(mr);
+          lastMotorCommandTime = millis();
+        }
+        if(key_values_changed[0] || key_values_changed[1]) { 
+          int x = key_values[0]; // -255 to 255
+          int y = key_values[1]; // -255 to 255  
+          MotorLeft.set(y + x);
+          MotorRight.set(y - x); 
+          lastMotorCommandTime = millis();
+        }
+        // Old sliders...
+        if(key_values_changed[5] || key_values_changed[6]) {
+          Servo1.set(key_values[5]*2);
+          Servo2.set(key_values[6]*2);
+          lastMotorCommandTime = millis();
+        }
+        if(key_values_changed[2] || key_values_changed[3] || key_values_changed[4]) {
+
+          float a = key_values[2]/127.0; // Convert to -1.0 to 1.0
+          float b = key_values[3]/127.0; // Convert to -1.0 to 1.0
+          float c = key_values[4]/127.0; // Convert to -1.0 to 1.0
+
+          LightVars.requestedValue = constrain(c * 255, 0, 255);
+        }
+        // New direct controls for servos and light
+        if(key_values_changed[10]) { // light
+          LightVars.requestedValue = constrain(key_values[10], 0, 255);
+        }
+        if(key_values_changed[11]) { // servo1
+          Servo1.set(key_values[11]);
+        }
+        if(key_values_changed[12]) { // servo2
+          Servo2.set(key_values[12]);
+        }
       }
       if((httpd_query_key_value(buf, "wifi_ssid", strbuf, sizeof(strbuf)) == ESP_OK) && 
          (httpd_query_key_value(buf, "wifi_password", strbuf2, sizeof(strbuf2)) == ESP_OK)) {
@@ -385,6 +454,44 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         } else {
           httpd_resp_sendstr(req, "Failed to update roboter name.");
         }
+      }
+      if((httpd_query_key_value(buf, "configDataRead", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        Serial.printf("Read request for configData index: %s\n", strbuf);
+        int index = atoi(strbuf);
+        if(index >= 0 && index < 9) {
+          char response[256]; response[0] = '\0';
+          char filename[30];
+          snprintf(filename, sizeof(filename), "/configData_%d.txt", index);
+          readFile(filename, response, sizeof(response));
+          httpd_resp_set_type(req, "text/plain");
+          httpd_resp_send(req, response, strlen(response));
+          free(buf);
+          return ESP_OK;
+        } 
+      }
+      if((httpd_query_key_value(buf, "configDataWrite", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        // Extract index and remaining string from strbuf, where strbuf is expected to start 
+        //with the index followed by a comma and then any amount of data.
+        int index = -1;
+        char *commaPos = strchr(strbuf, ',');
+        if(commaPos != NULL) {
+          *commaPos = '\0'; // Split the string at the comma
+          index = atoi(strbuf); // Convert the part before the comma to an integer index
+          char *valuePart = commaPos + 1; // The part after the comma is the value
+          if(index >= 0 && index < 9) {
+            char filename[30];
+            snprintf(filename, sizeof(filename), "/configData_%d.txt", index);
+            writeFile(filename, valuePart);
+            Serial.printf("Updated configData index %d: %s\n", index, valuePart);
+            httpd_resp_sendstr(req, "Config data updated successfully.");
+          } else {
+            httpd_resp_sendstr(req, "Invalid config data index.");
+          }
+        } else {
+          httpd_resp_sendstr(req, "Invalid config data format.");
+        }
+        free(buf);
+        return ESP_OK;
       }
       if((httpd_query_key_value(buf, "pwmThingRead", strbuf, sizeof(strbuf)) == ESP_OK)) {
         Serial.printf("Read request for PwmThing index: %s\n", strbuf);
@@ -495,50 +602,35 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         ESP.restart();
         return ESP_OK;
       }
+      if((strcmp(buf, "shutdown") == 0)) {
+        Serial.println("Shutdown requested");
+        httpd_resp_sendstr(req, "ok shutdown triggered...");
+        delay(100);
+        free(buf);
+        powerDownTimeout = 0xfffffffful;
+        return ESP_OK;
+      }
+      if((strcmp(buf, "trig") == 0)) {
+        Serial.println("Trigger requested");
+        httpd_resp_sendstr(req, "Triggered...");
+        delay(100);
+        free(buf);
+        MotorLeft.end();
+        MotorRight.end();
+        return ESP_OK;
+      }
     } else {
       free(buf);
       httpd_resp_send_404(req);
       return ESP_FAIL;
     }
     free(buf);
+    
   } else {
     httpd_resp_send_404(req);
     return ESP_FAIL;
   }
 
-  // 
-  int x = key_values[0]; // -255 to 255
-  int y = key_values[1]; // -255 to 255  
-  MotorLeft.set(y + x);
-  MotorRight.set(y - x); 
-
-  Servo1.set(key_values[5]*2);
-  Servo2.set(key_values[6]*2);
-  lastMotorCommandTime = millis();
-
-  float a = key_values[2]/127.0; // Convert to -1.0 to 1.0
-  float b = key_values[3]/127.0; // Convert to -1.0 to 1.0
-  float c = key_values[4]/127.0; // Convert to -1.0 to 1.0
-  float d = key_values[5]/127.0; // Convert to -1.0 to 1.0
-  float e = key_values[6]/127.0; // Convert to -1.0 to 1.0
-
-  //frame_limit_ms = mapFloat(a, -1.0, 1.0, 250.0, 20.0); 
-
-  int wval = constrain(c * 255, 0, 255);
-  if(WhiteLedMaxOnTimeMs <= 0) {
-    if(wval > WhiteLedTimeoutThresholdValue) wval = WhiteLedTimeoutThresholdValue; // Limit LED to threshold value to prevent overheating
-  }
-  WhiteLED.set(wval);
-
-  /*
-  quality = constrain(((1.0-b)/2.0)*63,4, 63);  // 0...63 lower=higher quality
-  static int prev_quality = 10;
-  if(quality != prev_quality) { 
-    sensor_t * s = esp_camera_sensor_get();
-    s->set_quality(s, quality); 
-    prev_quality = quality; 
-  }
-  */
   
   if(res){
     return httpd_resp_send_500(req);
@@ -587,8 +679,8 @@ void startCameraServer(){
     .user_ctx  = NULL
   };
   httpd_uri_t cors_options = {
-    .uri       = "/stream",           // Gleicher URI
-    .method    = HTTP_OPTIONS,        // OPTIONS-Methode!
+    .uri       = "/stream",           // same URI
+    .method    = HTTP_OPTIONS,        // OPTIONS method!
     .handler   = cors_options_handler,
     .user_ctx  = NULL
   };
@@ -598,18 +690,21 @@ void startCameraServer(){
     httpd_register_uri_handler(camera_httpd, &favicon_uri);
     httpd_register_uri_handler(camera_httpd, &cmd_uri);
     httpd_register_uri_handler(camera_httpd, &info_uri);
+    httpd_register_err_handler(camera_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
   } else Serial.println("Failed to start camera HTTP server");
-  config.server_port += 1;
+  config.server_port += 1; // Need extra port and server otherwise streaming blocks control commands
   config.ctrl_port += 1;
   if (httpd_start(&stream_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(stream_httpd, &stream_uri);
     httpd_register_uri_handler(stream_httpd, &cors_options); 
   } else Serial.println("Failed to start stream HTTP server");
+  CameraRunning = true;
 }
 
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
 
+  getCompileTime();
   Serial.begin(115200);
   Serial.setDebugOutput(false);
   uint32_t psramSize = psramFound() ? ESP.getPsramSize() : 0;
@@ -658,15 +753,15 @@ void setup() {
   config.pixel_format = PIXFORMAT_JPEG;     
   config.frame_size = FRAMESIZE_VGA;
   config.jpeg_quality = 30;
-  config.fb_count = 2;
   
   if(!psramFound()){
     config.fb_location = CAMERA_FB_IN_DRAM;
-    config.frame_size = FRAMESIZE_VGA;
-    config.jpeg_quality = 30;
     config.fb_count = 1;
   } else {
   //  heap_caps_malloc_extmem_enable(30000);
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.fb_count = 2;
+    config.grab_mode = CAMERA_GRAB_LATEST;
   }
   
   // Camera init
@@ -701,18 +796,18 @@ void setup() {
     WiFi.AP.create(roboter_name);
     WiFi.AP.enableDhcpCaptivePortal();
     APMode = true;
+    RedLED.startAnimation(1, 500); // Fast breathing red to indicate AP mode
 
     // by default DNSServer is started serving any "*" domain name. It will reply
     // AccessPoint's IP to all DNS request (this is required for Captive Portal detection)
-    if (dnsServer.start()) {
-      Serial.println("Started DNS server in captive portal-mode");
-    } else {
-      Serial.println("Err: Can't start DNS server!");
-    }
+    dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+    dnsServer.start(53, "*", WiFi.softAPIP());
+
     current_IP = WiFi.softAPIP();
   } else {
     current_IP = WiFi.localIP();
     strcpy(current_ssid, WiFi.SSID().c_str());
+    RedLED.startAnimation(1, 4000); // Slow breathing red to indicate successful WiFi connection
   }
   //esp_wifi_set_max_tx_power(40);
 
@@ -724,6 +819,8 @@ void setup() {
     ArduinoOTA.onStart([]() {
       // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
       OTA_Status = 2; // Set status to in progress
+      CameraRunning = false;
+      MotorLeft.set(0); MotorRight.set(0); // Stop motors during OTA
       Serial.print("Start updating ");
       WhiteLED.set(0); 
       RedLED.set(255); // Red LED on to indicate OTA in progress
@@ -737,7 +834,7 @@ void setup() {
     ArduinoOTA.begin();  
   #endif
 
-  if(WiFi.SSID() != "HACKFFM.DE") WhiteLedTimeoutThresholdValue = 1044; // Low light limit only for Hackerspace...
+  if(WiFi.SSID() != "HACKFFM.DE") LightVars.limitLowValue = LightVars.limitHighValue; // Low light limit only for Hackerspace...
 
   // Start streaming web server
   startCameraServer();
@@ -755,11 +852,35 @@ void setup() {
 
   sprintf(infotext, "Camera: %s", info->name);
 
-  WhiteLED.printInfo();
+  //WhiteLED.printInfo();
   WhiteLED.set(28);
   Serial.println("You can change the name, WiFi SSID, or password using serial commands.");
   Serial.println("Use 'name <newname>', 'ssid <newssid>' or 'password <newpassword>'.");
 
+}
+
+void powerDown() {
+  WhiteLED.set(0); 
+  RedLED.set(20);
+  MotorLeft.end();
+  MotorRight.end();
+  Servo1.end();
+  Servo2.end();
+  CameraRunning = false;
+  delay(1000);
+  httpd_stop(camera_httpd);
+  httpd_stop(stream_httpd);
+  esp_camera_deinit();
+  digitalWrite(XCLK_GPIO_NUM, LOW);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  esp_wifi_deinit();
+  RedLED.set(0);
+  Serial.println("Power down!");
+  Serial.flush(); 
+  delay(100);
+  gpio_deep_sleep_hold_en();
+  esp_deep_sleep_start();
 }
 
 int WiFiScanState = 0; // 0 = idle, 1 = scanning, 2 = scan done
@@ -848,6 +969,11 @@ void processSerial() {
         Serial.printf("Updated WiFi password to: %s\n", wifi_password);
       } else if(strncmp(inputBuffer, "scan", 4) == 0) {
         startWiFiScan();
+      } else if(strncmp(inputBuffer, "off", 3) == 0) {
+        powerDown();        
+      } else if(strncmp(inputBuffer, "t1", 2) == 0) {
+        camera_config_t config;     
+        sensor_t * s = esp_camera_sensor_get();   
       } else if(strncmp(inputBuffer, "reboot", 6) == 0) {
         Serial.println("Rebooting...");
         delay(100);
@@ -860,24 +986,111 @@ void processSerial() {
   }
 }
 
+void adjust_to_rssi() {
+  static uint32_t last_adjust_time = 0;
+  uint32_t now = millis();
+  
+  static int avg_rssi_sum = 0;
+  static int avg_rssi_count = 0;
 
+  if (now - last_adjust_time >= 100) {
+    // for AP mode take RSSI from 1st connected station
+    int rssi = WiFi.RSSI();
+    if (APMode) {
+      wifi_sta_list_t stationList;
+      esp_wifi_ap_get_sta_list(&stationList);
+      if (stationList.num > 0) {
+        rssi = stationList.sta[0].rssi;
+      }
+    }
+    avg_rssi_sum += rssi;
+    avg_rssi_count++;
+    if(avg_rssi_count >= 10) { // Update every 10 samples
+      int avg_rssi = avg_rssi_sum / avg_rssi_count;
+      current_rssi = avg_rssi;
+
+      // Adjust camera settings based on average RSSI if set to auto
+      // currently only for 640x480
+      if(cameraConfig.fps == 0) {
+        if(avg_rssi > -55) {
+          frame_limit_ms = 1000 / 25; // Up to 25 fps
+          if(cameraConfig.quality == 0) quality = 6;
+        } else if(avg_rssi > -65) {
+          frame_limit_ms = 1000 / 20; // Up to 20 fps
+          if(cameraConfig.quality == 0) quality = 18;
+        } else if(avg_rssi > -75) {
+          frame_limit_ms = 1000 / 15; // Up to 15 fps
+          if(cameraConfig.quality == 0) quality = 30;
+        } else {
+          frame_limit_ms = 1000 / 7; // Up to 7 fps
+          if(cameraConfig.quality == 0) quality = 45;
+        }
+      }
+       
+      avg_rssi_sum = 0;
+      avg_rssi_count = 0;
+    }
+    last_adjust_time = now;
+  }
+}
+
+void adjust_light() {
+  static int prevValue = -2;
+  static uint32_t lastBoostUpdateTime = 0;
+  uint32_t now = millis();
+  uint32_t timeDiff = now - lastBoostUpdateTime;
+
+  // Update boost time, decrease normally when LED is on, increase by 20ms/s when LED is off or low to allow boost again after cooldown
+  if(timeDiff >= 100) {
+    if(LightVars.Value > LightVars.limitLowValue) {
+      if(LightVars.boostTime > 0) {
+        LightVars.boostTime -= timeDiff; // Decrease boost time when LED is on high
+      }
+    } else {
+      if(LightVars.boostTime < LightVars.boostTimeMax) {
+        LightVars.boostTime += (timeDiff * 20) / 1000; // Increase boost time by 20ms/s when LED is off or low
+      }
+    }
+    lastBoostUpdateTime = now;
+    // Limit light level based on boost time
+    if(LightVars.boostTime > 1000) {
+      LightVars.Value = min(LightVars.Value, LightVars.limitHighValue); 
+    } else {
+      LightVars.Value = min(LightVars.Value, LightVars.limitLowValue); 
+    }
+  }
+  
+  // Set new value if requested
+  if(LightVars.requestedValue != -1) {
+    if(LightVars.boostTime > 1000) {
+      LightVars.Value = min(LightVars.requestedValue, LightVars.limitHighValue); 
+    } else {
+      LightVars.Value = min(LightVars.requestedValue, LightVars.limitLowValue); 
+    } 
+    LightVars.requestedValue = -1;
+  }
+
+  // Adjust LED brightness on change of value
+  if(LightVars.Value != prevValue) {
+     prevValue = LightVars.Value;
+     WhiteLED.set(LightVars.Value);
+  }
+}
 
 void loop() {
-  if(OTA_Status < 2) calc_fps();
+  if(OTA_Status < 2) {
+    calc_fps();
+    adjust_to_rssi();
+  }
 
   #ifdef ENABLE_OTA
   ArduinoOTA.handle(); // allow OTA updates
   #endif
 
-  if(WhiteLED.get() > WhiteLedTimeoutThresholdValue) {
-    if(WhiteLedMaxOnTimeMs > 0) {
-      WhiteLedMaxOnTimeMs -= 10; // Count down timer
-    } else {
-      WhiteLED.set(WhiteLedTimeoutThresholdValue); // Limit LED to threshold value to prevent overheating
-    }
-  } else if(WhiteLedMaxOnTimeMs < 30000) {
-    WhiteLedMaxOnTimeMs += 1; // Count up timer when LED is off or low
-  }
+  if(APMode) dnsServer.processNextRequest(); // Handle DNS requests in AP mode for captive portal
+
+  RedLED.doAnimation();
+  adjust_light();
 
   if(lastMotorCommandTime > 0 && (millis() - lastMotorCommandTime > 5000)) {
     MotorLeft.set(0);
@@ -885,6 +1098,16 @@ void loop() {
     lastMotorCommandTime = 0;
     Serial.println("Motor command timeout, stopping motors");
   }
+
+  // Auto power down
+  if(lastMotorCommandTime == 0) {
+    if((powerDownTimeout > 0) && (millis() - powerDownTimer > powerDownTimeout)) {
+      powerDown();
+    }
+  } else {
+    powerDownTimer = millis(); // Reset power down timer when motor command is active
+  }
+  if(powerDownTimeout == 0xfffffffful) { powerDown();}
 
   processSerial(); // Check for serial commands 
 

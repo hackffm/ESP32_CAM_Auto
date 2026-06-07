@@ -2,6 +2,8 @@
 #include "FS.h"
 #include <LittleFS.h> 
 #include "PwmThing.h"
+#include <stdio.h>   
+#include <string.h>  
 
 extern PwmThing WhiteLED;
 extern fs::FS &filesystem;
@@ -13,6 +15,65 @@ extern fs::FS &filesystem;
 const int usablePins[]     = {-1,2,3,12,13,14,15 /* ,33 ,1 ,3, 4 */};
 const char availablePins[] = "-1,2,3,12,13,14,15";  // For Web Interface
 const size_t usablePinsCount = sizeof(usablePins) / sizeof(usablePins[0]);
+
+
+
+// Global static array to hold the compile time string in "YYYYMMDD HH:mm:ss" format
+char CompileTime[20] = {0}; // Buffer size: 17 chars + null terminator
+
+/**
+ * @brief Retrieves the compile date and time in the format "YYYYMMDD HH:mm:ss"
+ *        and stores it in the global static array CompileTime.
+ *
+ * This function uses the predefined macros __DATE__ and __TIME__ to obtain the
+ * compilation date and time. It parses these macros, converts the month name
+ * to a numerical value (1-12), and formats the result into the CompileTime array.
+ * The format follows ISO 8601 conventions for date and time representation.
+ *
+ * @note The CompileTime array is static and initialized only once. It will retain
+ *       its value for the duration of the program execution.
+ */
+void getCompileTime() {
+    // Extract date components from __DATE__ (format: "Mmm dd yyyy")
+    const char* date = __DATE__;
+    char month_str[4] = {0}; // Buffer for 3-letter month abbreviation + null terminator
+    int day, year;
+
+    // Parse the date string using sscanf. Expected format: "Dec 25 2023"
+    // Note: The space before %d handles single-digit days (e.g., "Dec  5 2023")
+    if (sscanf(date, "%3s %d %d", month_str, &day, &year) != 3) {
+        // In case of parsing failure, clear the buffer and return
+        CompileTime[0] = '\0';
+        return;
+    }
+
+    // Map the 3-letter month abbreviation to a numerical value (Jan=1, Feb=2, ..., Dec=12)
+    const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    int month = 0;
+    for (int i = 0; i < 12; ++i) {
+        if (strcmp(month_str, months[i]) == 0) {
+            month = i + 1; // Months are 1-based
+            break;
+        }
+    }
+
+    // Extract time components from __TIME__ (format: "hh:mm:ss")
+    const char* time = __TIME__;
+    int hour, minute, second;
+
+    // Parse the time string using sscanf. Expected format: "14:30:45"
+    if (sscanf(time, "%d:%d:%d", &hour, &minute, &second) != 3) {
+        CompileTime[0] = '\0';
+        return;
+    }
+
+    // Format the result into the CompileTime array as "YYYYMMDD HH:mm:ss"
+    // Using snprintf ensures buffer safety and proper formatting with leading zeros
+    snprintf(CompileTime, sizeof(CompileTime), "%04d%02d%02d %02d:%02d:%02d",
+             year, month, day, hour, minute, second);
+}
+
 
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) 
 { return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow; }

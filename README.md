@@ -18,7 +18,14 @@ Connect it to USB-Serial-Board, hit `Pioarduino -> Project Tasks -> esp32cam -> 
 - Care must be taken that PWM stuff like analogWrite usually used high-speed timers, but camera clock is using low-speed timers. Arduino does not know about the already used camera timers, but as it uses high-speed timers instead there is no conflict.
 
 # Hardware setup
-## Cabling
+## Cabling with special PCB
+With the special PCB cabling is as easy as connecting left and right motor to the upper 2pin row of the headers and the servo to the lower 3pin row of the headers. For servo, the control line (typical the yellow cable) goes to where the pin is missing on the row above.
+If servo does not work, you might need to turn the connector - as long as all 3 pins are connected nothing should broke even if the connector is in the wrong direction. For motor, check that the motors turn forward if you control the joystick forward, otherwise just turn the 2pin connector to change the motor direction of that motor that rotates in the wrong direction.
+
+Supply power from Power Bank via USB-C cable to PCB to turn on the robot. Beware that the PCB does not include the programming hardware for the ESP-CAM - you have to program the ESP-CAM module with a separate programming adapter and then transfer it to the motor driver PCB.
+
+PCB preparation: The idea is that you cut Pin 1 (the one with the square pad on the PCB) away to get a 3+2 pol connector from that originally 2x3 pol connector.
+## Manual cabling
 - For full-bridge motor drivers connect inputs to 12+13 and 15+14, add connectors to the motors that you can easily swap or turn the motor lines to adjust for correct drive direction
 - For 360° servos just pick two of the available pins and set them up via web interface for left and right motor
 - We used an USB A plug and a power supply for suppy. In such a case wire separate cables for motors and for ESP32 beginning from USB plug to avoid issues that motor starting currents are affecting ESP32
@@ -47,6 +54,14 @@ The following pins can not be used even if they are available on the ESP32 CAM b
 
 ## Supported motors
 Both servos and full-bridge motor drivers are supported. Currently only seperate left- and right-motor are supported (no steering servo). Servos can then be 360deg servos used as motors, adjust min/zero/max limits for servos, zero is where 360deg servos does not turn (but they are stopped if appropriate servo variant is selected anyway).
+
+# Usage
+## LED indications
+Slow breathing red LED means normal operation and having a valid WiFi connection. You should be able to control your robot via website of the IP or the name the robot (default: http://cambot.local)
+
+Fast breathing red LED means robot has not found a valid WiFi connection and is acting as WiFi access point. Scan you WiFi environment, connect to the WiFi that matches your robot name (default: cambot), and then go to http://192.168.4.1 to either control your robot directly or connect it to your home WiFi using the Settings area, where you could also scan for your WiFi access points. Beware that the ESP-CAM is 2.4GHz only, so you can connect it only access points that support 2.4GHz WiFi.
+
+No breathing or blinking or off: Something is broken or not powered. If white LED blinks two times the modul could not start the camera module - so check the connection to the camera module first. Beware that to open the camera connector you have to twist the black element by 90° (meaning pulling it away from PCB surface) and not pull it along the PCB. Currently supported camera modules: OV2640 or OV3660 (recommended).
 
 # Known issues
 ## It does not compile
