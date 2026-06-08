@@ -98,8 +98,8 @@ struct LightVariables {
   int Value = 0;                    // What the light is currently set to, timeouts and limits are applied to this value, and this is what is actually set on the LED
   int lowValue = 30;                // User defined value for candle/torch light (no time limit if below limitLowValue)
   int highValue = 255;              // User defined value for strong brightness (will be time limited)
-  int limitLowValue = 50;           // Unlimited brightness up to this value, above this value, the timeout will apply
-  int limitHighValue = 200;         // Absolute maximum allowed brightness, even for boost, to prevent overheating
+  int limitLowValue = 250;           // Unlimited brightness up to this value, above this value, the timeout will apply
+  int limitHighValue = 250;         // Absolute maximum allowed brightness, even for boost, to prevent overheating
   int boostTime = 30000;            // Available boost time in milliseconds
   int boostTimeMax = 30000;         // Maximum boost time in milliseconds (e.g. to calculate remaining boost time percentage)
 } LightVars;
@@ -164,8 +164,9 @@ void setCameraToConfig() {
     }
     //s->set_xclk(s, LEDC_TIMER_0, 8000000UL);
     s->set_pll(s, 0, 25, 1, 0, 0, 0, 1, 10); // pushes 8MHz ext to same internally as 20mhz before
-    s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio
+    s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio 
     s->set_reg(s, 0x6706, 0x0f, 0x03); // Adjust temperature sampling frequency to 8 MHz XVCLK
+    s->set_brightness(s, 2); // Increase brightness to reduce noise in dark areas
   } else if(s->id.PID == OV2640_PID) {
     if(cameraConfig.rotation == 1) {
       s->set_hmirror(s, 1);
