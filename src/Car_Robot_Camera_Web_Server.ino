@@ -250,6 +250,25 @@ void loadPwmThingConfigs() {
   }
 }
 
+void loadLightServoLowHighVals() {
+  char buffer[50];
+  if(filesystem.exists("/ls_lh_vals.txt")) {
+    File file = filesystem.open("/ls_lh_vals.txt", "r");
+    if(file) {
+      size_t len = file.readBytes(buffer, sizeof(buffer)-1);
+      buffer[len] = '\0';
+      sscanf(buffer, "%d,%d,%d,%d,%d,%d", &LightVars.lowValue, &LightVars.highValue, &Servo1Vars.lowValue, &Servo1Vars.highValue, &Servo2Vars.lowValue, &Servo2Vars.highValue);
+      file.close();
+    }
+  }
+}
+
+void storeLightServoLowHighVals() {
+  char buffer[50];
+  snprintf(buffer, sizeof(buffer), "%d,%d,%d,%d,%d,%d\n", LightVars.lowValue, LightVars.highValue, Servo1Vars.lowValue, Servo1Vars.highValue, Servo2Vars.lowValue, Servo2Vars.highValue);
+  writeFile("/ls_lh_vals.txt", buffer);
+}
+
 httpd_handle_t camera_httpd = NULL;
 httpd_handle_t stream_httpd = NULL;
 
@@ -358,10 +377,10 @@ static esp_err_t cmd_handler(httpd_req_t *req){
   size_t buf_len;
   char variable[32] = {0,};
   // Array of char strings "x", "y", "z" for example, to be used as query keys
-  const char* query_keys[] = {"x", "y", "a", "b", "c", "d", "e", "f", "ml", "mr", "light", "servo1", "servo2"};
+  const char* query_keys[] = {"x", "y", "a", "b", "c", "d", "e", "f", "ml", "mr", "light", "servo1", "servo2", "lightLowValue", "lightHighValue", "Servo1LowValue", "Servo1HighValue", "Servo2LowValue", "Servo2HighValue"};
   int num_keys = sizeof(query_keys) / sizeof(query_keys[0]);
-  static int key_values[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0}; // Array to hold the values of the query keys
-  int key_values_changed[13] = {0,0,0,0,0,0,0,0,0,0,0,0,0}; // Array to track which keys have changed for performance optimizations
+  static int key_values[19] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; // Array to hold the values of the query keys
+  int key_values_changed[19] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; // Array to track which keys have changed for performance optimizations
   int res = -1;
   char strbuf[120] = {0,};
   char strbuf2[120] = {0,};
@@ -425,6 +444,15 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         }
         if(key_values_changed[12]) { // servo2
           Servo2.set(key_values[12]);
+        }
+        if(key_values_changed[13] || key_values_changed[14] || key_values_changed[15] || key_values_changed[16] || key_values_changed[17] || key_values_changed[18]) { 
+          if(key_values_changed[13]) LightVars.lowValue = constrain(key_values[13], 0, 255);
+          if(key_values_changed[14]) LightVars.highValue = constrain(key_values[14], 0, 255);
+          if(key_values_changed[15]) Servo1Vars.lowValue = constrain(key_values[15], -255, 255);
+          if(key_values_changed[16]) Servo1Vars.highValue = constrain(key_values[16], -255, 255);
+          if(key_values_changed[17]) Servo2Vars.lowValue = constrain(key_values[17], -255, 255);
+          if(key_values_changed[18]) Servo2Vars.highValue = constrain(key_values[18], -255, 255);
+          storeLightServoLowHighVals();
         }
       }
       if((httpd_query_key_value(buf, "wifi_ssid", strbuf, sizeof(strbuf)) == ESP_OK) && 
@@ -778,6 +806,8 @@ void setup() {
   setCameraToConfig();
   storeCameraConfig(); // Store default config if not already stored
 
+  loadLightServoLowHighVals();
+
   // Wi-Fi connection
   WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(roboter_name); 
@@ -1014,7 +1044,7 @@ void adjust_to_rssi() {
       if(cameraConfig.fps == 0) {
         if(avg_rssi > -55) {
           frame_limit_ms = 1000 / 25; // Up to 25 fps
-          if(cameraConfig.quality == 0) quality = 6;
+          if(cameraConfig.quality == 0) quality = 18; // 6 is too crazy for 25 fps
         } else if(avg_rssi > -65) {
           frame_limit_ms = 1000 / 20; // Up to 20 fps
           if(cameraConfig.quality == 0) quality = 18;
@@ -1048,7 +1078,7 @@ void adjust_light() {
       }
     } else {
       if(LightVars.boostTime < LightVars.boostTimeMax) {
-        LightVars.boostTime += (timeDiff * 20) / 1000; // Increase boost time by 20ms/s when LED is off or low
+        LightVars.boostTime += (timeDiff * 50) / 1000; // Increase boost time by 50ms/s when LED is off or low
       }
     }
     lastBoostUpdateTime = now;

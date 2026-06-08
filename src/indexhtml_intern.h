@@ -29,6 +29,18 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     .slider-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
     input[type=range] { flex: 1; height: 35px; }
     .slider-value { min-width: 55px; font-weight: bold; color: #9b8bf3; text-align: right; }
+    .slider-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 4px; flex-wrap: wrap; gap: 6px; }
+    .slider-header label { font-weight: bold; color: #8bdcf3; font-size: 14px; margin: 0; }
+
+    .ctrl-btn {
+      padding: 3px 10px; font-size: 12px; border: none; border-radius: 4px;
+      background: #2a2a2a; color: #f0ad5e; cursor: pointer;
+      border: 1px solid #555; white-space: nowrap; }
+    .ctrl-btn:hover  { background: #444; }
+    .ctrl-btn:active { background: #666; }
+    .ctrl-btn.active { background: #3a3010; border-color: #f0ad5e; color: #ffe08a; }
 
     /* ── Gamepad ── */
     .gpds_row { display: flex; gap: 8px;
@@ -226,35 +238,96 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
        Reads:  nothing from other blocks
   ############################################################## -->
   <div id="block-drive" class="section">
-    <h2>Drive &amp; Light Controls</h2>
+  <h2>Drive &amp; Light Controls</h2>
 
-    <!-- Light slider -->
-    <div class="slider-container">
+  <!-- Light slider -->
+  <div class="slider-container">
+    <div class="slider-header">
       <label id="label-light">💡 Light (0–100%)</label>
-      <div class="slider-row">
-        <input type="range" id="slider-light" min="0" max="100" value="0">
-        <div class="slider-value" id="val-light">0%</div>
-      </div>
+      <span style="display:flex;gap:6px;">
+        <button class="ctrl-btn" id="btn-light-offlow">🌑 Off / 🔦 Low</button>
+        <button class="ctrl-btn" id="btn-light-boost">🌟 Boost</button>
+      </span>
     </div>
+    <div class="slider-row">
+      <input type="range" id="slider-light" min="0" max="100" value="0">
+      <div class="slider-value" id="val-light">0%</div>
+    </div>
+  </div>
 
-    <!-- Servo 1 slider -->
-    <div class="slider-container">
+  <!-- Light Low/High sub-sliders -->
+  <div class="slider-container" style="margin-left:20px;">
+    <label style="font-size:11px;color:#aaa;">Light Low (0–255)</label>
+    <div class="slider-row">
+      <input type="range" id="slider-lightLow" min="0" max="255" value="30" style="height:18px;">
+      <div class="slider-value" id="val-lightLow" style="font-size:11px;color:#aaa;min-width:35px;">30</div>
+    </div>
+  </div>
+  <div class="slider-container" style="margin-left:20px;">
+    <label style="font-size:11px;color:#aaa;">Light High (0–255)</label>
+    <div class="slider-row">
+      <input type="range" id="slider-lightHigh" min="0" max="255" value="255" style="height:18px;">
+      <div class="slider-value" id="val-lightHigh" style="font-size:11px;color:#aaa;min-width:35px;">255</div>
+    </div>
+  </div>
+
+  <!-- Servo 1 slider -->
+  <div class="slider-container">
+    <div class="slider-header">
       <label id="label-servo1">Servo 1</label>
-      <div class="slider-row">
-        <input type="range" id="slider-servo1" min="-255" max="255" value="0">
-        <div class="slider-value" id="val-servo1">0</div>
-      </div>
+      <button class="ctrl-btn" id="btn-servo1-updown">⬆ Up / ⬇ Down</button>
     </div>
+    <div class="slider-row">
+      <input type="range" id="slider-servo1" min="-255" max="255" value="0">
+      <div class="slider-value" id="val-servo1">0</div>
+    </div>
+  </div>
 
-    <!-- Servo 2 slider -->
-    <div class="slider-container">
-      <label id="label-servo2">Servo 2</label>
-      <div class="slider-row">
-        <input type="range" id="slider-servo2" min="-255" max="255" value="0">
-        <div class="slider-value" id="val-servo2">0</div>
-      </div>
+  <!-- Servo 1 Low/High sub-sliders -->
+  <div class="slider-container" style="margin-left:20px;">
+    <label style="font-size:11px;color:#aaa;">Servo 1 Low (-255–255)</label>
+    <div class="slider-row">
+      <input type="range" id="slider-servo1Low" min="-255" max="255" value="-30" style="height:18px;">
+      <div class="slider-value" id="val-servo1Low" style="font-size:11px;color:#aaa;min-width:35px;">-30</div>
     </div>
-  </div><!-- end #block-drive -->
+  </div>
+  <div class="slider-container" style="margin-left:20px;">
+    <label style="font-size:11px;color:#aaa;">Servo 1 High (-255–255)</label>
+    <div class="slider-row">
+      <input type="range" id="slider-servo1High" min="-255" max="255" value="150" style="height:18px;">
+      <div class="slider-value" id="val-servo1High" style="font-size:11px;color:#aaa;min-width:35px;">150</div>
+    </div>
+  </div>
+
+  <!-- Servo 2 slider -->
+  <div class="slider-container">
+    <div class="slider-header">
+      <label id="label-servo2">Servo 2</label>
+      <button class="ctrl-btn" id="btn-servo2-updown">⬆ Up / ⬇ Down</button>
+    </div>
+    <div class="slider-row">
+      <input type="range" id="slider-servo2" min="-255" max="255" value="0">
+      <div class="slider-value" id="val-servo2">0</div>
+    </div>
+  </div>
+
+  <!-- Servo 2 Low/High sub-sliders -->
+  <div class="slider-container" style="margin-left:20px;">
+    <label style="font-size:11px;color:#aaa;">Servo 2 Low (-255–255)</label>
+    <div class="slider-row">
+      <input type="range" id="slider-servo2Low" min="-255" max="255" value="-30" style="height:18px;">
+      <div class="slider-value" id="val-servo2Low" style="font-size:11px;color:#aaa;min-width:35px;">-30</div>
+    </div>
+  </div>
+  <div class="slider-container" style="margin-left:20px;">
+    <label style="font-size:11px;color:#aaa;">Servo 2 High (-255–255)</label>
+    <div class="slider-row">
+      <input type="range" id="slider-servo2High" min="-255" max="255" value="150" style="height:18px;">
+      <div class="slider-value" id="val-servo2High" style="font-size:11px;color:#aaa;min-width:35px;">150</div>
+    </div>
+  </div>
+
+</div><!-- end #block-drive -->
 
   <!-- ##############################################################
        BLOCK 3 — GAMEPAD
@@ -457,12 +530,12 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     applyParsedState();
   }
 
-  function applyParsedState() {
+  window.applyParsedState = function() {
     titleElement.textContent = "HackFFM-Bot: " + robotState.Name;
     document.title           = "HackFFM-Bot: " + robotState.Name;
     roboter_name_set = true;
     document.getElementById("version-display").textContent = robotState.Version;
-  }
+  };
 
   async function updateInfo() {
     try {
@@ -612,7 +685,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         STICK_COLOR = "rgba(255,165,0,0.7)";
         stick = { x: 0, y: 0 };
         updateCmdFromStick();
-        sendData(true);
+        sendData(false);
         drawJoystick();
       }, 8000);
 
@@ -622,7 +695,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
         y: -ny * (JOY_H / 2)
       };
       updateCmdFromStick();
-      sendData(true);
+      sendData(false);
       drawJoystick();
     };
 
@@ -631,7 +704,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       STICK_COLOR = "rgba(255,165,0,0.7)";
       stick = { x: 0, y: 0 };
       updateCmdFromStick();
-      sendData(true);
+      sendData(false);
       drawJoystick();
     };
 
@@ -764,37 +837,252 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
        Owns: light slider, servo1 slider, servo2 slider.
        Writes: cmd_light, cmd_servo1, cmd_servo2 (shared layer).
   ============================================================ -->
-  <script>
-  (function() {
+<script>
+(function() {
 
-    const sliderLight  = document.getElementById("slider-light");
-    const sliderServo1 = document.getElementById("slider-servo1");
-    const sliderServo2 = document.getElementById("slider-servo2");
-    const valLight     = document.getElementById("val-light");
-    const valServo1    = document.getElementById("val-servo1");
-    const valServo2    = document.getElementById("val-servo2");
+  const sliderLight     = document.getElementById("slider-light");
+  const sliderServo1    = document.getElementById("slider-servo1");
+  const sliderServo2    = document.getElementById("slider-servo2");
+  const valLight        = document.getElementById("val-light");
+  const valServo1       = document.getElementById("val-servo1");
+  const valServo2       = document.getElementById("val-servo2");
 
-    sliderLight.addEventListener("input", () => {
-      const pct = parseInt(sliderLight.value);
-      valLight.textContent = pct + "%";
-      cmd_light = Math.round(pct / 100 * 255);
-      sendData(false);
-    });
+  const sliderLightLow  = document.getElementById("slider-lightLow");
+  const sliderLightHigh = document.getElementById("slider-lightHigh");
+  const valLightLow     = document.getElementById("val-lightLow");
+  const valLightHigh    = document.getElementById("val-lightHigh");
 
-    sliderServo1.addEventListener("input", () => {
-      cmd_servo1 = parseInt(sliderServo1.value);
-      valServo1.textContent = cmd_servo1;
-      sendData(false);
-    });
+  const sliderS1Low     = document.getElementById("slider-servo1Low");
+  const sliderS1High    = document.getElementById("slider-servo1High");
+  const valS1Low        = document.getElementById("val-servo1Low");
+  const valS1High       = document.getElementById("val-servo1High");
 
-    sliderServo2.addEventListener("input", () => {
-      cmd_servo2 = parseInt(sliderServo2.value);
-      valServo2.textContent = cmd_servo2;
-      sendData(false);
-    });
+  const sliderS2Low     = document.getElementById("slider-servo2Low");
+  const sliderS2High    = document.getElementById("slider-servo2High");
+  const valS2Low        = document.getElementById("val-servo2Low");
+  const valS2High       = document.getElementById("val-servo2High");
 
-  })(); /* end IIFE block 2 */
-  </script>
+  /* ── Debounce timers for range sends ── */
+  let timerLight  = null;
+  let timerS1     = null;
+  let timerS2     = null;
+
+  /* ── Apply robotState values once on page load.
+        Called by applyParsedState() in JS Block 0 the first time. ── */
+  const _origApply = window.applyParsedState || null;
+  let rangeInitDone = false;
+
+  function initRangesFromState() {
+    if (rangeInitDone) return;
+    rangeInitDone = true;
+
+    sliderLightLow.value  = robotState.lightLowValue;
+    valLightLow.textContent = robotState.lightLowValue;
+
+    sliderLightHigh.value = robotState.lightHighValue;
+    valLightHigh.textContent = robotState.lightHighValue;
+
+    sliderS1Low.value  = robotState.Servo1LowValue;
+    valS1Low.textContent = robotState.Servo1LowValue;
+
+    sliderS1High.value = robotState.Servo1HighValue;
+    valS1High.textContent = robotState.Servo1HighValue;
+
+    sliderS2Low.value  = robotState.Servo2LowValue;
+    valS2Low.textContent = robotState.Servo2LowValue;
+
+    sliderS2High.value = robotState.Servo2HighValue;
+    valS2High.textContent = robotState.Servo2HighValue;
+  }
+
+  /* Hook into applyParsedState so we catch the first /info response */
+  function updateLightLabel() {
+    const lo   = Math.round(robotState.lightLimitLowValue  / 255 * 100);
+    const hi   = Math.round(robotState.lightLimitHighValue / 255 * 100);
+    const bt   = robotState.lightBoostTime;
+    const btm  = robotState.lightBoostTimeMax;
+    document.getElementById("label-light").textContent =
+      `💡 Light (0%…${lo}%…${hi}%, Boost available: ${bt}s from ${btm}s)`;
+  }
+
+  window.applyParsedState = function() {
+    if (_origApply) _origApply();
+    initRangesFromState();
+    updateLightLabel();
+  };
+
+  /* ── Helper: send light range after 1 s idle ── */
+  function scheduleLight() {
+    clearTimeout(timerLight);
+    timerLight = setTimeout(() => {
+      robotState.lightLowValue  = parseInt(sliderLightLow.value);
+      robotState.lightHighValue = parseInt(sliderLightHigh.value);
+      fetch('/action?lightLowValue=' + robotState.lightLowValue +
+                    '&lightHighValue=' + robotState.lightHighValue)
+        .catch(() => {});
+    }, 1000);
+  }
+
+  /* ── Helper: send servo1 range after 1 s idle ── */
+  function scheduleS1() {
+    clearTimeout(timerS1);
+    timerS1 = setTimeout(() => {
+      robotState.Servo1LowValue  = parseInt(sliderS1Low.value);
+      robotState.Servo1HighValue = parseInt(sliderS1High.value);
+      fetch('/action?Servo1LowValue=' + robotState.Servo1LowValue +
+                    '&Servo1HighValue=' + robotState.Servo1HighValue)
+        .catch(() => {});
+    }, 1000);
+  }
+
+  /* ── Helper: send servo2 range after 1 s idle ── */
+  function scheduleS2() {
+    clearTimeout(timerS2);
+    timerS2 = setTimeout(() => {
+      robotState.Servo2LowValue  = parseInt(sliderS2Low.value);
+      robotState.Servo2HighValue = parseInt(sliderS2High.value);
+      fetch('/action?Servo2LowValue=' + robotState.Servo2LowValue +
+                    '&Servo2HighValue=' + robotState.Servo2HighValue)
+        .catch(() => {});
+    }, 1000);
+  }
+
+  /* ── Main slider events (unchanged behaviour) ── */
+  sliderLight.addEventListener("input", () => {
+    const pct = parseInt(sliderLight.value);
+    valLight.textContent = pct + "%";
+    cmd_light = Math.round(pct / 100 * 255);
+    sendData(false);
+  });
+
+  sliderServo1.addEventListener("input", () => {
+    cmd_servo1 = parseInt(sliderServo1.value);
+    valServo1.textContent = cmd_servo1;
+    sendData(false);
+  });
+
+  sliderServo2.addEventListener("input", () => {
+    cmd_servo2 = parseInt(sliderServo2.value);
+    valServo2.textContent = cmd_servo2;
+    sendData(false);
+  });
+
+  /* ── Light range sub-sliders ── */
+  sliderLightLow.addEventListener("input", () => {
+    valLightLow.textContent = sliderLightLow.value;
+    scheduleLight();
+  });
+  sliderLightHigh.addEventListener("input", () => {
+    valLightHigh.textContent = sliderLightHigh.value;
+    scheduleLight();
+  });
+
+  /* ── Servo 1 range sub-sliders ── */
+  sliderS1Low.addEventListener("input", () => {
+    valS1Low.textContent = sliderS1Low.value;
+    scheduleS1();
+  });
+  sliderS1High.addEventListener("input", () => {
+    valS1High.textContent = sliderS1High.value;
+    scheduleS1();
+  });
+
+  /* ── Servo 2 range sub-sliders ── */
+  sliderS2Low.addEventListener("input", () => {
+    valS2Low.textContent = sliderS2Low.value;
+    scheduleS2();
+  });
+  sliderS2High.addEventListener("input", () => {
+    valS2High.textContent = sliderS2High.value;
+    scheduleS2();
+  });
+
+    /* ── Light: Off/Low toggle ── */
+  let lightOffLowState = false;   // false = Off, true = Low
+  const btnOffLow = document.getElementById("btn-light-offlow");
+  const btnBoost  = document.getElementById("btn-light-boost");
+
+  function applyLightValue(raw255) {
+    // raw255 = 0…255 mapped to slider 0…100
+    const pct = Math.round(raw255 / 255 * 100);
+    sliderLight.value        = pct;
+    valLight.textContent     = pct + "%";
+    cmd_light                = raw255;
+    robotState.lightValue    = raw255;
+    sendData(false);
+  }
+
+  btnOffLow.addEventListener("click", () => {
+    lightOffLowState = !lightOffLowState;
+    if (lightOffLowState) {
+      btnOffLow.classList.add("active");
+      applyLightValue(robotState.lightLowValue);
+    } else {
+      btnOffLow.classList.remove("active");
+      applyLightValue(0);
+    }
+  });
+
+  /* ── Light: Boost momentary ── */
+  function boostOn()  { applyLightValue(robotState.lightHighValue); }
+  function boostOff() {
+    // restore to whatever Off/Low state says
+    applyLightValue(lightOffLowState ? robotState.lightLowValue : 0);
+  }
+
+  btnBoost.addEventListener("pointerdown",  boostOn);
+  btnBoost.addEventListener("pointerup",    boostOff);
+  btnBoost.addEventListener("pointerleave", boostOff);
+  btnBoost.addEventListener("pointercancel",boostOff);
+
+  /* ── Servo 1: Up/Down toggle ── */
+  let servo1UpState = false;   // false = Low, true = High
+  const btnS1UD = document.getElementById("btn-servo1-updown");
+
+  function applyServo1Value(val) {
+    sliderServo1.value   = val;
+    valServo1.textContent = val;
+    cmd_servo1           = val;
+    robotState.Servo1Value = val;
+    sendData(false);
+  }
+
+  btnS1UD.addEventListener("click", () => {
+    servo1UpState = !servo1UpState;
+    if (servo1UpState) {
+      btnS1UD.classList.add("active");
+      applyServo1Value(robotState.Servo1HighValue);
+    } else {
+      btnS1UD.classList.remove("active");
+      applyServo1Value(robotState.Servo1LowValue);
+    }
+  });
+
+  /* ── Servo 2: Up/Down toggle ── */
+  let servo2UpState = false;
+  const btnS2UD = document.getElementById("btn-servo2-updown");
+
+  function applyServo2Value(val) {
+    sliderServo2.value    = val;
+    valServo2.textContent = val;
+    cmd_servo2            = val;
+    robotState.Servo2Value = val;
+    sendData(false);
+  }
+
+  btnS2UD.addEventListener("click", () => {
+    servo2UpState = !servo2UpState;
+    if (servo2UpState) {
+      btnS2UD.classList.add("active");
+      applyServo2Value(robotState.Servo2HighValue);
+    } else {
+      btnS2UD.classList.remove("active");
+      applyServo2Value(robotState.Servo2LowValue);
+    }
+  });
+
+})(); /* end IIFE block 2 */
+</script>
 
 <!-- ============================================================
        JS BLOCK 3 — GAMEPAD
@@ -984,21 +1272,24 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       /* button handling */
       const buttons = gp.buttons;
       if (lastGamepadButtons) {
-        for (let i = 0; i < buttons.length; i++) {
-          const pressed    = buttons[i].pressed;
-          const wasPressed = lastGamepadButtons[i];
-          if (pressed && !wasPressed) {
-            if (i === servo_1_index) {
-              /* TODO: call Block 2 public API, e.g. adjustServo1(+step) */
+        for (let j = 0; j < gp.buttons.length; j++) {
+          const pressed    = gp.buttons[j].pressed;
+          const wasPessed  = lastGamepadButtons[j];
+
+          /* ── rising edge (just pressed) ── */
+          if (pressed && !wasPessed) {
+            if (j === servo_1_index)   document.getElementById("btn-servo1-updown").click();
+            if (j === servo_2_index)   document.getElementById("btn-servo2-updown").click();
+            if (j === low_light_index) document.getElementById("btn-light-offlow").click();
+          }
+
+          /* ── flash light: momentary hold ── */
+          if (j === flash_light_index) {
+            if (pressed && !wasPessed) {
+              document.getElementById("btn-light-boost").dispatchEvent(new PointerEvent("pointerdown"));
             }
-            if (i === servo_2_index) {
-              /* TODO: call Block 2 public API, e.g. adjustServo1(-step) */
-            }
-            if (i === low_light_index) {
-              /* TODO: call Block 2 public API, e.g. toggleLowLight() */
-            }
-            if (i === flash_light_index) {  
-              /* TODO: call Block 2 public API, e.g. toggleFlashLight() */
+            if (!pressed && wasPessed) {
+              document.getElementById("btn-light-boost").dispatchEvent(new PointerEvent("pointerup"));
             }
           }
         }
@@ -1028,7 +1319,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
             selectedGamepadIndex = i;
             search_gamepad_output.textContent = 'Found: ' + gp.id;
             rebuildGamepadDropdown();          /* update dropdown to show & select it */
-            /* NOTE: gamepad index/name intentionally NOT persisted */
+            gpdsel_gamepadSelect.value = String(i);
+            gpdsel_gamepadSelect.dispatchEvent(new Event("change"));
             return;
           }
         }
