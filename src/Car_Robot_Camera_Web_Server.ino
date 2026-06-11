@@ -1,8 +1,9 @@
 /*********
  
-   The MIT License (MIT) (but poisoned by GPL in the Face Library)
+   The MIT License (MIT) 
    Hackerspace-FFM e.V. ESP32 CAM Robot with Web Interface
-   2026-06-02 Lutz Lisseck
+   https://www.hackerspace-ffm.de/wiki/index.php?title=FPV-Roboter
+   2026-06-12 Lutz Lisseck 
 
   Derived from this work: 
   Rui Santos & Sara Santos - Random Nerd Tutorials
@@ -11,7 +12,7 @@
   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 *********/
 
-const char version_string[] = "V1.12";
+const char version_string[] = "V1.14";
 
 #define MOTOR_1_PIN_1    14
 #define MOTOR_1_PIN_2    15
@@ -24,8 +25,8 @@ const char version_string[] = "V1.12";
 // Wifi credentials are in a MyCreds.h file that must reside in /<HOME>/.platformio/lib/MyCreds/MyCreds.h
 // see attic/MyCreds.h for an example
 #if defined __has_include
-#  if __has_include (<MyCredsHackffm.h>)
-#    include <MyCredsHackffm.h>  // Define WIFI_SSID and WIFI_PASSWORD here - put this file in /<HOME>/.platformio/lib/MyCreds/MyCredsHackffm.h
+#  if __has_include (<MyCredsLabyrinth.h>)
+#    include <MyCredsLabyrinth.h>  // Define WIFI_SSID and WIFI_PASSWORD here - put this file in /<HOME>/.platformio/lib/MyCreds/MyCredsHackffm.h
 #  else
 #    define WIFI_SSID ""
 #    define WIFI_PASSWORD ""
@@ -40,10 +41,24 @@ char roboter_name[34] = "cambot"; // only use a-z, 0-9 and - in the name
 char wifi_ssid[34] = WIFI_SSID;  // "REPLACE_WITH_YOUR_SSID";
 char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
+// =============================================================
+//  User-configurable channel list for scanning.
+//  Fill this with the channels you actually want to probe.
+//  Using non-overlapping channels (e.g. 1, 6, 11 or 1, 7, 13)
+//  keeps the scan short and the stream interruption minimal.
+//  Leave empty {} to scan ALL channels (slower).
+// =============================================================
+static const uint8_t ROAM_SCAN_CHANNELS[] = {}; //{1,2,3,4,5,6,7,8,9,10,11,12,13}; // { 1, 7, 13 };
+static const size_t  ROAM_SCAN_CHANNEL_COUNT =
+        sizeof(ROAM_SCAN_CHANNELS) / sizeof(ROAM_SCAN_CHANNELS[0]);
+
 #include "esp_camera.h"
 #include <WiFi.h>
 #include "esp_wifi.h"
 #include <WiFiMulti.h>
+#include <WiFiUdp.h>
+#include <lwip/sockets.h>
+#include <lwip/netdb.h>
 #include <DNSServer.h> // For captive portal
 #include <ESPmDNS.h>
 #include "esp_timer.h"
@@ -58,20 +73,43 @@ char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #include "PwmThing.h"
 #include "FS.h"
 #include <LittleFS.h> 
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+
+// =============================================================
+//  Detect whether 802.11r Fast Transition is compiled into
+//  this build. This is decided at compile time.
+// =============================================================
+#ifdef CONFIG_ESP_WIFI_11R_SUPPORT
+  #define ROAM_FT_AVAILABLE 1
+#else
+  #define ROAM_FT_AVAILABLE 0
+#endif
 
 #define ENABLE_OTA 
 int OTA_Status = 0; // 0=not enabled, 1=enabled, 2=in progress
 DNSServer dnsServer;
 bool APMode = false;
+bool RoamForceTriggered = false;
+
 
 IPAddress current_IP(192, 168, 4, 1);
 char      current_ssid[34] = ""; 
+char      current_bssid[34] = ""; 
+int       current_channel = 0;
 int       current_rssi = -50;
 
 PwmThing MotorLeft, MotorRight, Servo1, Servo2, WhiteLED, RedLED;
 
 WiFiMulti wifiMulti;
 
+// Gamemaster stuff
+const unsigned int gmPort = 8071;        // UDP port for gamemaster
+IPAddress gmLastRemoteIp;
+uint16_t  gmLastRemotePort = 0;
+bool      gmLastRemoteValid = false;
+WiFiUDP gmUdp;
 
 // Store data used in PwmThing.begin for Motors and Servos here in an array of a structto be stored in LittleFS and to be used on startup
 struct PwmThingConfig {
@@ -96,9 +134,9 @@ struct LightVariables {
   // All values are usually 0...255 for 0% to 100% brightness
   int requestedValue = -1;          // User request goes here, -1 means no request, applied in main loop with limits and timeouts
   int Value = 0;                    // What the light is currently set to, timeouts and limits are applied to this value, and this is what is actually set on the LED
-  int lowValue = 30;                // User defined value for candle/torch light (no time limit if below limitLowValue)
+  int lowValue = 50;                // User defined value for candle/torch light (no time limit if below limitLowValue)
   int highValue = 255;              // User defined value for strong brightness (will be time limited)
-  int limitLowValue = 250;           // Unlimited brightness up to this value, above this value, the timeout will apply
+  int limitLowValue = 75;           // Unlimited brightness up to this value, above this value, the timeout will apply
   int limitHighValue = 250;         // Absolute maximum allowed brightness, even for boost, to prevent overheating
   int boostTime = 30000;            // Available boost time in milliseconds
   int boostTimeMax = 30000;         // Maximum boost time in milliseconds (e.g. to calculate remaining boost time percentage)
@@ -127,7 +165,7 @@ struct ServoVariables {
 
 struct CameraConfig {
   int rotation; // 0 = no rotation, 1 = 180° rotation
-  int size; // 0 = 320x240 (QVGA), 1 = 640x480 (VGA), 2 = 800x600 (SVGA), 3 = 1024x768 (XGA), 4 = 1280x1024 (SXGA), 5 = 1600x1200 (UXGA)
+  int size; // 0 = 320x240 (QVGA), 1 = 400x296 (CIF), 2 = 640x480 (VGA), 3 = 800x600 (SVGA), 4 = 1024x768 (XGA), 5 = 1280x1024 (SXGA), 6 = 1600x1200 (UXGA)
   int fps; // Limit FPS, 0 = auto, 1...7 = 2,5,10,15,20,25,30 fps
   int quality; // 0 = auto, 1 very poor (63), 2 poor (42), 3 medium (30), 4 good (18), 5 very good (6)
 } cameraConfig = {0, 1, 0, 0};
@@ -137,9 +175,9 @@ fs::FS &filesystem = LittleFS;
 
 void setCameraToConfig() {
   sensor_t * s = esp_camera_sensor_get();
-  framesize_t size2framesize[] = {FRAMESIZE_QVGA, FRAMESIZE_VGA, FRAMESIZE_SVGA, 
+  framesize_t size2framesize[] = {FRAMESIZE_QVGA, FRAMESIZE_CIF, FRAMESIZE_VGA, FRAMESIZE_SVGA, 
     FRAMESIZE_XGA, FRAMESIZE_SXGA, FRAMESIZE_UXGA};
-  if(cameraConfig.size < 0 || cameraConfig.size > 5) cameraConfig.size = 1; // default to VGA if out of bounds  
+  if(cameraConfig.size < 0 || cameraConfig.size > 6) cameraConfig.size = 2; // default to VGA if out of bounds  
   s->set_framesize(s, size2framesize[cameraConfig.size]);
   //s->set_quality(s, cameraConfig.quality);
 
@@ -330,18 +368,18 @@ static esp_err_t info_handler(httpd_req_t *req){
   static char info[2048];
   int info_len = 0;
   // sprintf(infotext, "BSSID: %s, Camera: %s", WiFi.BSSIDstr().c_str(), info->name);
-  info_len = snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u bytes, Free PSRAM: %u bytes, \r\n", 
+  info_len = snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u, Free PSRAM: %u, \r\n", 
      infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, Channel: %d, IP: %s \r\n", 
-     current_ssid, WiFi.BSSIDstr().c_str(), WiFi.channel(), current_IP.toString().c_str());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Avg RSSI: %d dBm, FPS: %d (Limit: %d), Quality: %d, kBytes/s: %d, Command/s: %d\r\n", 
-     current_rssi, fps, 1000/frame_limit_ms, quality, bps/1024, cps);    
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, IP: %s \r\n", 
+     current_ssid, current_bssid,  current_IP.toString().c_str());
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Avg RSSI: %d dBm, FPS: %d/%d, Quality: %d, kBytes/s: %d, Command/s: %d\r\n", 
+     current_rssi, fps, frame_limit_ms?1000/frame_limit_ms:0, quality, bps/1024, cps);    
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "ML: %d, MR: %d, Powerdown timer: %lu s\r\n", 
      MotorLeft.get(), MotorRight.get(), (powerDownTimeout - (millis() - powerDownTimer))/1000);      
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version: %s %s, Uptime: %lu s\r\n", version_string, CompileTime, millis() / 1000);  
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", "
      "B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo1 (%d)\", E=\"Servo2 (%d)\", ", 
-     roboter_name, 1000/frame_limit_ms, quality, LightVars.boostTime/1000,0, Servo1.getDuty(), Servo2.getDuty());
+     roboter_name, frame_limit_ms?1000/frame_limit_ms:0, quality, LightVars.boostTime/1000,0, Servo1.getDuty(), Servo2.getDuty());
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "lightValue=\"%d\", lightLowValue=\"%d\", lightHighValue=\"%d\", "
       "lightLimitLowValue=\"%d\", lightLimitHighValue=\"%d\", lightBoostTime=\"%d\", lightBoostTimeMax=\"%d\", ", 
      LightVars.Value, LightVars.lowValue, LightVars.highValue, LightVars.limitLowValue, LightVars.limitHighValue, 
@@ -351,6 +389,11 @@ static esp_err_t info_handler(httpd_req_t *req){
      Servo1Vars.Value, Servo1Vars.lowValue, Servo1Vars.highValue, Servo1.getDuty(), 
      Servo2Vars.Value, Servo2Vars.lowValue, Servo2Vars.highValue, Servo2.getDuty());
   info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version=\"%s\", ", version_string);
+
+  char status[255] = "FPS: 12/30, Q:32, RSSI:-75";
+  snprintf(status, sizeof(status), "FPS:%d/%d, Q:%d, RSSI:%d, Ch:%d", fps, frame_limit_ms?1000/frame_limit_ms:0, 
+     quality, current_rssi, current_channel);
+  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Status=\"%s\", ", status);
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
 }
@@ -441,7 +484,8 @@ static esp_err_t cmd_handler(httpd_req_t *req){
           LightVars.requestedValue = constrain(key_values[10], 0, 255);
         }
         if(key_values_changed[11]) { // servo1
-          Servo1.set(key_values[11]);
+          //Servo1.set(key_values[11]);
+          Servo1.startAnimation(2, 1000, Servo1.get(), key_values[11]);
         }
         if(key_values_changed[12]) { // servo2
           Servo2.set(key_values[12]);
@@ -542,6 +586,26 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         httpd_resp_send(req, availablePins, strlen(availablePins));
         free(buf);
         return ESP_OK;
+      }
+      if((strcmp(buf, "powerDownRead") == 0)) {
+        Serial.println("Power down read request received");
+        httpd_resp_set_type(req, "text/plain");
+        char response[25];
+        snprintf(response, sizeof(response), "%ld", powerDownTimeout/(1000UL*60));
+        httpd_resp_send(req, response, strlen(response));
+        free(buf);
+        return ESP_OK;
+      }
+      if((httpd_query_key_value(buf, "powerDownWrite", strbuf, sizeof(strbuf)) == ESP_OK)) {
+        int pdval = atoi(strbuf);
+        Serial.printf("Write request for power down value: %d\n", pdval);
+        powerDownTimeout = constrain(pdval,0,240) * 1000UL * 60;
+        char response[25];
+        snprintf(response, sizeof(response), "%ld", powerDownTimeout);
+        writeFile("/powerdowntimeout.txt", response);
+        powerDownTimer = millis(); 
+        free(buf);
+        return ESP_OK;       
       }
       if((strcmp(buf, "cameraConfigRead") == 0)) {
         Serial.println("Camera config request received");
@@ -644,8 +708,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         httpd_resp_sendstr(req, "Triggered...");
         delay(100);
         free(buf);
-        MotorLeft.end();
-        MotorRight.end();
+        RoamForceTriggered = true;
         return ESP_OK;
       }
     } else {
@@ -739,6 +802,12 @@ void setup() {
   uint32_t psramSize = psramFound() ? ESP.getPsramSize() : 0;
   Serial.printf("Reset: PSRAM: %uMB, Flash: %uMB\n", psramSize / (1024 * 1024), ESP.getFlashChipSize() / (1024 * 1024));
 
+    #ifdef CONFIG_ESP_WIFI_11R_SUPPORT
+        Serial.println("802.11r (FT) is compiled in");
+    #else
+        Serial.println("802.11r NOT compiled in - falling back to fast reconnect");
+    #endif
+
   WhiteLED.begin(WHITE_LED_PIN, -1, PwmThing::pwmOutGamma, false);
   RedLED.begin(RED_LED_PIN, -1, PwmThing::pwmOutGamma, true);
   
@@ -754,6 +823,10 @@ void setup() {
   readFile("/wifi_ssid.txt", wifi_ssid, sizeof(wifi_ssid));
   readFile("/wifi_password.txt", wifi_password, sizeof(wifi_password));
   Serial.printf("Loaded config: Name=%s, SSID=%s, Password=%s\n", roboter_name, wifi_ssid, wifi_password);
+  char buf[32];
+  readFile("/powerdowntimeout.txt", buf, sizeof(buf));
+  sscanf(buf, "%ld", &powerDownTimeout);
+  if(powerDownTimeout !=0 ) powerDownTimeout = constrain(powerDownTimeout, 120*1000UL, 240*60*1000UL); 
 
   loadPwmThingConfigs();
   initPwmThings();  
@@ -810,7 +883,8 @@ void setup() {
   loadLightServoLowHighVals();
 
   // Wi-Fi connection
-  WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
+  WiFi.persistent(false);
+  //WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
   WiFi.setHostname(roboter_name); 
   WiFi.mode(WIFI_STA);
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
@@ -865,11 +939,14 @@ void setup() {
     ArduinoOTA.begin();  
   #endif
 
-  if(WiFi.SSID() != "HACKFFM.DE") LightVars.limitLowValue = LightVars.limitHighValue; // Low light limit only for Hackerspace...
+  // if(WiFi.SSID() != "HACKFFM.DE") LightVars.limitLowValue = LightVars.limitHighValue; // Low light limit only for Hackerspace...
 
   // Start streaming web server
   startCameraServer();
   
+  // Start Udp gamemaster receiver
+  gmUdp.begin(gmPort);
+
   //analogWrite(WHITE_LED_PIN, 254); // LED low
   Serial.printf("ledcClockSource %d\n", ledcGetClockSource());
   
@@ -889,6 +966,243 @@ void setup() {
   Serial.println("Use 'name <newname>', 'ssid <newssid>' or 'password <newpassword>'.");
 
 }
+
+// Maximum lengths for the parsed parts (adjust if needed)
+#define MAX_ID_LEN    32
+#define MAX_KEY_LEN   32
+#define MAX_VALUE_LEN 128
+
+/*
+ * Callback that is invoked for every parsed key=value pair.
+ *
+ * Parameters:
+ *   id         - the id parsed at the beginning of data (either own_id or "*")
+ *   key        - the name of the key
+ *   value_typ  - 1 if the value is an integer (value_i is valid)
+ *                2 if the value is a string (value_s is valid)
+ *   value_i    - the integer value (only valid if value_typ == 1)
+ *   value_s    - the string value (only valid if value_typ == 2)
+ */
+void gotIdKeyValue(char *id, char *key, int value_typ, int value_i, char *value_s) {
+  if (value_typ == 1) {
+     Serial.printf("id=%s key=%s int=%d\n", id, key, value_i);
+  } else if (value_typ == 2) {
+     Serial.printf("id=%s key=%s str=%s\n", id, key, value_s);
+  }
+
+  char reply[512];
+
+  if (strcmp(key, "ping") == 0) {
+    snprintf(reply, sizeof(reply), "#%s:pong=%d,rssi=%d,fps=%d,fpslim=%d,quality=%d,kbs=%d,cps=%d", roboter_name, value_i, 
+    current_rssi, fps, frame_limit_ms?1000/frame_limit_ms:0, quality, bps/1024, cps);
+    gmReplyToSender(reply); // answer the sender directly
+  }
+  if((strcmp(key, "fileRead") == 0) && (value_typ == 2)) {
+    snprintf(reply, sizeof(reply), "#%s:file=\"%s\",content=\"", roboter_name, value_s);
+    int l = strlen(reply);
+    readFile(value_s, (char *)(reply+l), 500 - l);
+    l = strlen(reply);
+    reply[l] = '\"'; reply[l+1] = 0;
+    Serial.println(reply);
+    gmReplyToSender(reply);
+  }
+  if((strcmp(key, "boostTimeMax") == 0) && (value_typ == 1)) {  
+    LightVars.boostTimeMax = value_i;
+  }
+  if((strcmp(key, "boostTime") == 0) && (value_typ == 1)) {  
+    LightVars.boostTime = value_i;
+  }
+  if((strcmp(key, "limitLowValue") == 0) && (value_typ == 1)) {  
+    LightVars.limitLowValue = value_i;
+  }  
+  if((strcmp(key, "limitHighValue") == 0) && (value_typ == 1)) {  
+    LightVars.limitHighValue = value_i;
+  } 
+  if((strcmp(key, "fps") == 0) && (value_typ == 1)) {  
+    cameraConfig.fps = 4; // 15 fps
+    frame_limit_ms = value_i > 0 ? 1000 / value_i : 0;
+  } 
+  if((strcmp(key, "quality") == 0) && (value_typ == 1)) {  
+    cameraConfig.quality = 2; // 42
+    quality = constrain(value_i,4,63);
+  }   
+  if((strcmp(key, "framesize") == 0) && (value_typ == 1)) {  
+    sensor_t * s = esp_camera_sensor_get();
+    s->set_framesize(s, (framesize_t)constrain(value_i,0,24));
+    camera_sensor_info_t *info = esp_camera_sensor_get_info(&s->id);
+    if((info->model == CAMERA_OV3660)) {
+      s->set_pll(s, 0, 25, 1, 0, 0, 0, 1, 10); // pushes 8MHz ext to same internally as 20mhz before
+      s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio 
+      s->set_reg(s, 0x6706, 0x0f, 0x03); // Adjust temperature sampling frequency to 8 MHz XVCLK
+    } else if(s->id.PID == OV2640_PID) {
+      s->set_reg(s, 0x111, 0xff, 0x80); // activate clock doubler to compensate 8 Mhz 
+    }
+  } 
+}
+
+/*
+ * Parse a string of the form:
+ *   id:key1=value,key2="value",key3=value
+ *
+ * The function only parses if the id at the start of data equals own_id or "*".
+ * For every key=value pair found, gotIdKeyValue() is called.
+ *
+ * Parameters:
+ *   own_id - our own id (used to decide whether the data is meant for us)
+ *   data   - the 0-terminated input string to parse
+ *
+ * Example call:
+ *   parseIdKeyValue("device1", "device1:temp=23,name=\"sensor A\",mode=2");
+ */
+void parseIdKeyValue(const char *own_id, const char *data) {
+  if (own_id == NULL || data == NULL) {
+    return;
+  }
+
+  // --- Step 1: extract the id (everything up to the first ':') ---
+  const char *colon = strchr(data, ':');
+  if (colon == NULL) {
+    return; // no ':' found -> invalid format
+  }
+
+  size_t id_len = (size_t)(colon - data);
+  if (id_len >= MAX_ID_LEN) {
+    return; // id too long for our buffer
+  }
+
+  char id[MAX_ID_LEN];
+  memcpy(id, data, id_len);
+  id[id_len] = '\0';
+
+  // --- Step 2: check if this data is meant for us ---
+  // Accept if id matches own_id or if id is "*".
+  if (strcmp(id, "*") != 0 && strcmp(id, own_id) != 0) {
+    return; // not for us
+  }
+
+  // --- Step 3: parse the key=value pairs after the colon ---
+  const char *p = colon + 1; // start right after the ':'
+
+  while (*p != '\0') {
+    // Skip leading separators / whitespace before a key
+    while (*p == ',' || *p == ' ') {
+      p++;
+    }
+    if (*p == '\0') {
+      break;
+    }
+
+    // --- Parse key (until '=') ---
+    const char *key_start = p;
+    while (*p != '\0' && *p != '=' && *p != ',') {
+      p++;
+    }
+    if (*p != '=') {
+      // No '=' found -> malformed, stop parsing
+      break;
+    }
+
+    size_t key_len = (size_t)(p - key_start);
+    if (key_len == 0 || key_len >= MAX_KEY_LEN) {
+      break; // empty or too long key -> abort
+    }
+
+    char key[MAX_KEY_LEN];
+    memcpy(key, key_start, key_len);
+    key[key_len] = '\0';
+
+    p++; // skip the '='
+
+    // --- Parse value ---
+    char value_s[MAX_VALUE_LEN];
+    int value_typ = 0;
+    int value_i = 0;
+
+    if (*p == '"') {
+      // --- Quoted string value ---
+      p++; // skip opening quote
+      const char *val_start = p;
+      // Read until closing quote or end of string
+      while (*p != '\0' && *p != '"') {
+        p++;
+      }
+      size_t val_len = (size_t)(p - val_start);
+      if (val_len >= MAX_VALUE_LEN) {
+        val_len = MAX_VALUE_LEN - 1; // truncate to fit the buffer
+      }
+      memcpy(value_s, val_start, val_len);
+      value_s[val_len] = '\0';
+
+      if (*p == '"') {
+        p++; // skip closing quote
+      }
+      value_typ = 2; // string value
+
+    } else {
+      // --- Numeric (unquoted) value ---
+      const char *val_start = p;
+      while (*p != '\0' && *p != ',') {
+        p++;
+      }
+      size_t val_len = (size_t)(p - val_start);
+      if (val_len >= MAX_VALUE_LEN) {
+        val_len = MAX_VALUE_LEN - 1; // truncate to fit the buffer
+      }
+      memcpy(value_s, val_start, val_len);
+      value_s[val_len] = '\0';
+
+      // Convert the numeric string to an integer
+      value_i = atoi(value_s);
+      value_typ = 1; // integer value
+    }
+
+    // --- Step 4: report the parsed pair ---
+    gotIdKeyValue(id, key, value_typ, value_i, value_s);
+
+    // The loop start will skip any following ',' separators.
+  }
+}
+
+// Buffer for one incoming UDP packet.
+// Size it large enough for your longest expected message.
+#define GM_UDP_BUF_LEN 512
+
+/*
+ * Poll the gamemaster UDP socket and feed any received packet
+ * into the id/key/value parser.
+ */
+void handleGmUdp() {
+  int packetSize = gmUdp.parsePacket();
+  if (packetSize <= 0) return; // nothing received
+  // Store sender address/port for a possible direct reply.
+  gmLastRemoteIp    = gmUdp.remoteIP();
+  gmLastRemotePort  = gmUdp.remotePort();
+  gmLastRemoteValid = true;
+
+  char buf[GM_UDP_BUF_LEN];
+
+  // Read the packet into our buffer, leaving room for the 0-terminator.
+  int len = gmUdp.read(buf, GM_UDP_BUF_LEN - 1);
+  if (len < 0) return;
+  buf[len] = '\0'; // make it a proper C-string
+
+  parseIdKeyValue(roboter_name, buf);
+}
+
+/*
+ * Send a reply directly back to the sender of the last received packet.
+ * Returns true on success, false if no valid sender is known.
+ *
+ * Example:
+ *   gmReplyToSender("device1:ack=1");
+ */
+bool gmReplyToSender(const char *msg) {
+  if (!gmLastRemoteValid) return false; // we have not received anything yet
+  gmUdp.beginPacket(gmLastRemoteIp, gmLastRemotePort);
+  gmUdp.write((const uint8_t *)msg, strlen(msg));
+  return gmUdp.endPacket() == 1; // 1 = success
+}
+
 
 void powerDown() {
   WhiteLED.set(0); 
@@ -916,54 +1230,334 @@ void powerDown() {
 
 int WiFiScanState = 0; // 0 = idle, 1 = scanning, 2 = scan done
 
-void startWiFiScan() {
-  Serial.println("Scan start");
-  // WiFi.scanNetworks will return immediately in Async Mode.
-  WiFiScanState = 1;
-  WiFi.scanNetworks(true);  // 'true' turns Async Mode ON
-}
 
-void printScannedNetworks(uint16_t networksFound) {
-  if (networksFound == 0) {
-    Serial.println("no networks found");
-  } else {
-    Serial.println("\nScan done");
-    Serial.print(networksFound);
-    Serial.println(" networks found");
-    Serial.println("Nr | SSID                             | RSSI | CH | Encryption");
-    for (int i = 0; i < networksFound; ++i) {
-      // Print SSID and RSSI for each network found
-      Serial.printf("%2d", i + 1);
-      Serial.print(" | ");
-      Serial.printf("%-32.32s", WiFi.SSID(i).c_str());
-      Serial.print(" | ");
-      // print BSSID
-      Serial.printf("%02x:%02x:%02x:%02x:%02x:%02x", WiFi.BSSID(i)[0], WiFi.BSSID(i)[1], WiFi.BSSID(i)[2], 
-        WiFi.BSSID(i)[3], WiFi.BSSID(i)[4], WiFi.BSSID(i)[5]);
-      Serial.print(" | ");
-      Serial.printf("%4" PRIi32, WiFi.RSSI(i));
-      Serial.print(" | ");
-      Serial.printf("%2" PRIi32, WiFi.channel(i));
-      Serial.print(" | ");
-      switch (WiFi.encryptionType(i)) {
-        case WIFI_AUTH_OPEN:            Serial.print("open"); break;
-        case WIFI_AUTH_WEP:             Serial.print("WEP"); break;
-        case WIFI_AUTH_WPA_PSK:         Serial.print("WPA"); break;
-        case WIFI_AUTH_WPA2_PSK:        Serial.print("WPA2"); break;
-        case WIFI_AUTH_WPA_WPA2_PSK:    Serial.print("WPA+WPA2"); break;
-        case WIFI_AUTH_WPA2_ENTERPRISE: Serial.print("WPA2-EAP"); break;
-        case WIFI_AUTH_WPA3_PSK:        Serial.print("WPA3"); break;
-        case WIFI_AUTH_WPA2_WPA3_PSK:   Serial.print("WPA2+WPA3"); break;
-        case WIFI_AUTH_WAPI_PSK:        Serial.print("WAPI"); break;
-        default:                        Serial.print("unknown");
-      }
-      Serial.println();
-      delay(10);
+
+/**
+ * ROAMING DOES NOT WORK YET FOR WHATEVER REASON...
+ * Call this cyclically from loop().
+ *
+ * @param forceScan  true  => start a scan immediately (if none running)
+ *                   false => scan only when RSSI < SCAN_RSSI_THRESHOLD
+ *                            and the SCAN_INTERVAL has elapsed.
+ * @return true if a roaming switch or a hard reconnect was triggered.
+ *
+ * Behaviour:
+ *  - Scans only the channels listed in ROAM_SCAN_CHANNELS (custom
+ *    single-channel async scans chained together) to minimise airtime.
+ *  - If a same-SSID AP is HYSTERESIS_DB stronger, it reassociates to it
+ *    keeping the IP / DHCP lease (fast roam). Uses 802.11r FT if available.
+ *  - A gateway-reachability watchdog runs in parallel. If the default
+ *    gateway is unreachable for GW_FAIL_TIMEOUT_MS, a full "hard" reconnect
+ *    is performed (full scan, fresh DHCP, radio re-init).
+ */
+bool wifiRoamTask(bool forceScan) {
+    // ---------------- Configuration ----------------
+    constexpr int8_t   SCAN_RSSI_THRESHOLD = -75;   // dBm
+    constexpr int8_t   HYSTERESIS_DB       = 12;    // dB better required
+    constexpr uint32_t SCAN_INTERVAL_MS    = 30000; // 30 s between auto-scans
+    constexpr uint32_t SWITCH_COOLDOWN_MS  = 10000; // calm period after a roam
+    constexpr uint32_t PER_CHANNEL_MS      = 300;   // dwell time per channel
+
+    // Watchdog config
+    constexpr uint32_t GW_PING_INTERVAL_MS = 10000;  // how often to probe GW
+    constexpr uint32_t GW_FAIL_TIMEOUT_MS  = 30000;  // unreachable -> hard reset
+    constexpr uint16_t GW_PROBE_PORT       = 80;    // TCP SYN target port
+
+    // ---------------- Scan state machine ----------------
+    enum ScanState { SCAN_IDLE, SCAN_RUNNING };
+    static ScanState scanState   = SCAN_IDLE;
+    static uint32_t  lastScanMs   = 0;
+    static uint32_t  lastSwitchMs = 0;
+    static size_t    chanIdx      = 0;   // index into ROAM_SCAN_CHANNELS
+
+    // Accumulated best candidate across the per-channel scans
+    static int       bestRssiAcc  = -128;
+    static uint8_t   bestBssidAcc[6];
+    static int32_t   bestChanAcc  = 0;
+    static bool      candidateFound = false;
+
+    // ---------------- Watchdog state ----------------
+    static uint32_t  lastGwOkMs    = 0;
+    static uint32_t  lastGwProbeMs = 0;
+
+    const uint32_t now = millis();
+
+    // =====================================================
+    // 0) If not connected, let the (hard) reconnect logic
+    //    handle it. Abort any running scan cleanly.
+    // =====================================================
+    if (WiFi.status() != WL_CONNECTED) {
+        if (scanState == SCAN_RUNNING) {
+            WiFi.scanDelete();
+            scanState = SCAN_IDLE;
+        }
+        // Reset watchdog timer so we don't immediately hard-reset again.
+        //lastGwOkMs = now;
+        //return false;
+        lastGwProbeMs = now; // Don't ping, but try reconnect
     }
-    Serial.println("");
-    // Delete the scan result to free memory for code below.
-    WiFi.scanDelete();
-  }
+
+    // =====================================================
+    // 1) Gateway watchdog (non-blocking TCP SYN probe)
+    // =====================================================
+    if (lastGwOkMs == 0) lastGwOkMs = now;   // init on first connected call
+
+    if (now - lastGwProbeMs >= GW_PING_INTERVAL_MS) {
+        lastGwProbeMs = now;
+
+        IPAddress gw = WiFi.gatewayIP();
+        if (gw != IPAddress(0, 0, 0, 0)) {
+            // Non-blocking connect attempt to the gateway.
+            int s = lwip_socket(AF_INET, SOCK_STREAM, 0);
+            if (s >= 0) {
+                // set non-blocking
+                int flags = lwip_fcntl(s, F_GETFL, 0);
+                lwip_fcntl(s, F_SETFL, flags | O_NONBLOCK);
+
+                struct sockaddr_in addr = {};
+                addr.sin_family = AF_INET;
+                addr.sin_port   = htons(GW_PROBE_PORT);
+                addr.sin_addr.s_addr = (uint32_t)gw;
+
+                lwip_connect(s, (struct sockaddr*)&addr, sizeof(addr));
+
+                // Quick select to see if it connects (or gets refused,
+                // which still proves L3 reachability).
+                fd_set wset, eset;
+                FD_ZERO(&wset); FD_ZERO(&eset);
+                FD_SET(s, &wset); FD_SET(s, &eset);
+                struct timeval tv = { 0, 200000 }; // 200 ms max
+                int r = lwip_select(s + 1, NULL, &wset, &eset, &tv);
+
+                bool reachable = false;
+                if (r > 0) {
+                    // Either connected or RST received => host is alive.
+                    int err = 0; socklen_t len = sizeof(err);
+                    lwip_getsockopt(s, SOL_SOCKET, SO_ERROR, &err, &len);
+                    // ECONNREFUSED also means the gateway answered.
+                    if (err == 0 || err == ECONNREFUSED) reachable = true;
+                }
+                lwip_close(s);
+
+                if (reachable) lastGwOkMs = now; else
+                  Serial.printf("Gateway probe: %sreachable (r=%d, err=%d)\n",
+                      reachable ? "" : "NOT ", r, errno);
+            }
+        } else {
+            // No gateway known yet -> treat as ok to avoid false resets.
+            lastGwOkMs = now;
+        }
+    }
+
+    // Watchdog tripped -> hard reconnect (slow but robust)
+    if (now - lastGwOkMs >= GW_FAIL_TIMEOUT_MS) {
+        Serial.printf("Gateway unreachable for %lu ms -> hard reconnect",
+              (unsigned long)(now - lastGwOkMs));
+
+        if (scanState == SCAN_RUNNING) {
+            WiFi.scanDelete();
+            scanState = SCAN_IDLE;
+        }
+
+        // Tear everything down, re-init the radio, fresh DHCP, full scan.
+        WiFi.persistent(false);
+        WiFi.disconnect(true, true);     // disconnect + erase config
+        WiFi.mode(WIFI_OFF);
+        delay(50);
+        esp_wifi_stop();                 // stop driver -> radio recalibration
+        delay(50);
+        esp_wifi_start();
+        WiFi.mode(WIFI_STA);
+        WiFi.setAutoReconnect(true);
+
+        // Reconnect using the stored SSID/password from NVS or your globals.
+        WiFi.begin(wifi_ssid, wifi_password);   // full scan + fresh DHCP
+
+        lastGwOkMs    = now;   // reset watchdog window
+        lastSwitchMs  = now;
+        lastScanMs    = now;
+        return true;
+    }
+
+    // =====================================================
+    // 2) Scan trigger logic
+    // =====================================================
+    if (scanState == SCAN_IDLE &&
+        (now - lastSwitchMs > SWITCH_COOLDOWN_MS)) {
+
+        bool startScan = false;
+        if (forceScan) {
+            startScan = true;
+        } else if ((now - lastScanMs) >= SCAN_INTERVAL_MS) {
+            if (WiFi.RSSI() < SCAN_RSSI_THRESHOLD) {
+                startScan = true;
+            } else {
+                lastScanMs = now;   // RSSI fine, just reset the tick
+            }
+        }
+
+        if (startScan) {
+            // Reset accumulators and start scanning the first channel.
+            chanIdx        = 0;
+            bestRssiAcc    = WiFi.RSSI() + HYSTERESIS_DB; // must be beaten
+            candidateFound = false;
+            lastScanMs     = now;
+
+            if (ROAM_SCAN_CHANNEL_COUNT == 0) {
+                // No list given -> scan all channels in one async scan.
+                WiFi.scanNetworks(true, false, false, PER_CHANNEL_MS, 0);
+                Serial.printf("Starting full async scan (all channels, %d ms dwell)\n", PER_CHANNEL_MS);
+            } else {
+                // Start with the first channel from our list.
+                WiFi.scanNetworks(true, false, false, PER_CHANNEL_MS,
+                                  ROAM_SCAN_CHANNELS[chanIdx]);
+                Serial.printf("Starting async scan on channel %d (dwell %d ms)\n", ROAM_SCAN_CHANNELS[chanIdx], PER_CHANNEL_MS);
+            }
+            scanState = SCAN_RUNNING;
+        }
+    }
+
+    // =====================================================
+    // 3) Scan result handling (per-channel chaining)
+    // =====================================================
+    if (scanState == SCAN_RUNNING) {
+        int n = WiFi.scanComplete();
+        
+        if (n == WIFI_SCAN_RUNNING) return false;   // -1: still scanning
+
+        if (n == WIFI_SCAN_FAILED) {                // -2: start failed/busy
+            // The driver rejected the scan (often busy with the video
+            // stream). Clean up and RETRY the SAME channel next call,
+            // do NOT advance chanIdx.
+            static uint8_t failRetries = 0;
+            WiFi.scanDelete();
+
+            if (++failRetries >= 5) {
+                // Give up this scan round to avoid an infinite stall.
+                Serial.println("Scan kept failing -> aborting scan round");
+                failRetries = 0;
+                scanState   = SCAN_IDLE;
+                lastScanMs  = now;          // back off until next interval
+                return false;
+            }
+
+            // Re-arm the same channel.
+            int16_t ret = WiFi.scanNetworks(
+                true, false, false, PER_CHANNEL_MS,
+                (ROAM_SCAN_CHANNEL_COUNT > 0) ? ROAM_SCAN_CHANNELS[chanIdx] : 0);
+            Serial.printf("Scan retry ch=%d ret=%d (try %u)\n",
+                (ROAM_SCAN_CHANNEL_COUNT > 0) ? ROAM_SCAN_CHANNELS[chanIdx] : 0,
+                ret, failRetries);
+            return false;
+        }
+
+        // n >= 0: results available -> evaluate this channel.
+        if (n >= 0) {
+            const String   curSsid  = WiFi.SSID();
+            const uint8_t* curBssid = WiFi.BSSID();
+            Serial.printf("Scan result: n=%d, ch=%d\n", n, ROAM_SCAN_CHANNELS[chanIdx]);
+
+            for (int i = 0; i < n; ++i) {
+                if (WiFi.SSID(i) != curSsid)                 continue;
+                if (memcmp(WiFi.BSSID(i), curBssid, 6) == 0) continue;
+                int8_t r = WiFi.RSSI(i);
+                if (r > bestRssiAcc) {
+                    bestRssiAcc = r;
+                    memcpy(bestBssidAcc, WiFi.BSSID(i), 6);
+                    bestChanAcc = WiFi.channel(i);
+                    candidateFound = true;
+                }
+            }
+        }
+        WiFi.scanDelete();
+
+        // Advance to next channel and CHECK the start return value.
+        bool moreChannels = false;
+        if (ROAM_SCAN_CHANNEL_COUNT > 0) {
+            chanIdx++;
+            if (chanIdx < ROAM_SCAN_CHANNEL_COUNT) {
+                int16_t ret = WiFi.scanNetworks(
+                    true, false, false, PER_CHANNEL_MS,
+                    ROAM_SCAN_CHANNELS[chanIdx]);
+                if (ret == WIFI_SCAN_FAILED) {
+                    // Stay in SCAN_RUNNING; the -2 branch above will
+                    // retry this channel on the next call.
+                    Serial.printf("Next-channel scan start failed ch=%d\n",
+                                  ROAM_SCAN_CHANNELS[chanIdx]);
+                }
+                moreChannels = true;   // keep SCAN_RUNNING either way
+            }
+        }
+
+        if (moreChannels) return false;
+
+        // ---- All requested channels scanned: decide on roaming ----
+        scanState = SCAN_IDLE;
+
+        Serial.printf("Scan done. %sandidate found. CH: %d\n", candidateFound ? " C":"No c", bestChanAcc);
+
+        if (candidateFound) {
+            wifi_config_t cfg = {};
+            esp_wifi_get_config(WIFI_IF_STA, &cfg);
+            memcpy(cfg.sta.bssid, bestBssidAcc, 6);
+            cfg.sta.bssid_set = true;
+            cfg.sta.channel   = (uint8_t)bestChanAcc;
+
+        #if ROAM_FT_AVAILABLE
+            cfg.sta.rm_enabled  = true;
+            cfg.sta.btm_enabled = true;
+            cfg.sta.ft_enabled  = true;
+        #endif
+
+            // Disconnect first - ESP32 WiFi stack ignores bssid_set on already-connected STA
+            esp_wifi_disconnect();
+
+            // Small delay to let the stack process the disconnect cleanly
+            vTaskDelay(pdMS_TO_TICKS(100));
+
+            esp_wifi_set_config(WIFI_IF_STA, &cfg);
+
+            esp_err_t err = esp_wifi_connect();
+            if (err == ESP_OK) {
+                lastSwitchMs = now;
+
+                // Wait for actual connection and verify target BSSID was reached
+                uint32_t waitStart = millis();
+                bool connected = false;
+                while (millis() - waitStart < 5000) {
+                    if (WiFi.status() == WL_CONNECTED) {
+                        connected = true;
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+
+                if (connected) {
+                    // Use esp_wifi_sta_get_ap_info() - more reliable than WiFi.BSSIDstr()
+                    wifi_ap_record_t apInfo;
+                    if (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK) {
+                        bool bssidMatch = (memcmp(apInfo.bssid, bestBssidAcc, 6) == 0);
+                        Serial.printf("Roam -> %02X:%02X:%02X:%02X:%02X:%02X "
+                                      "ch %ld RSSI %d (FT=%d) BSSIDmatch=%d\n",
+                                      apInfo.bssid[0], apInfo.bssid[1], apInfo.bssid[2],
+                                      apInfo.bssid[3], apInfo.bssid[4], apInfo.bssid[5],
+                                      (long)bestChanAcc, apInfo.rssi,
+                                      ROAM_FT_AVAILABLE, bssidMatch);
+                    }
+                } else {
+                    Serial.println("Roam: connect timeout, reverting bssid_set=false");
+                    // Fallback: let ESP32 choose AP freely again
+                    cfg.sta.bssid_set = false;
+                    esp_wifi_set_config(WIFI_IF_STA, &cfg);
+                    esp_wifi_connect();
+                }
+                return connected;
+            }
+        }
+
+    }
+
+    return false;
 }
 
 void processSerial() {
@@ -990,6 +1584,13 @@ void processSerial() {
         strlcpy(roboter_name, inputBuffer + 5, sizeof(roboter_name));
         writeFile("/roboter_name.txt", roboter_name);
         Serial.printf("Updated name to: %s\n", roboter_name);
+      } else if(strncmp(inputBuffer, "n ", 2) == 0) {
+        strlcpy(roboter_name, inputBuffer + 2, sizeof(roboter_name));
+        writeFile("/roboter_name.txt", roboter_name);
+        Serial.printf("Updated name to: %s\n", roboter_name);
+        Serial.println("Rebooting...");
+        delay(100);
+        ESP.restart();
       } else if(strncmp(inputBuffer, "ssid ", 5) == 0) {
         strlcpy(wifi_ssid, inputBuffer + 5, sizeof(wifi_ssid));
         writeFile("/wifi_ssid.txt", wifi_ssid);
@@ -999,7 +1600,7 @@ void processSerial() {
         writeFile("/wifi_password.txt", wifi_password);
         Serial.printf("Updated WiFi password to: %s\n", wifi_password);
       } else if(strncmp(inputBuffer, "scan", 4) == 0) {
-        startWiFiScan();
+        RoamForceTriggered = true; // Trigger WiFi scan/roam in main loop
       } else if(strncmp(inputBuffer, "off", 3) == 0) {
         powerDown();        
       } else if(strncmp(inputBuffer, "t1", 2) == 0) {
@@ -1033,6 +1634,32 @@ void adjust_to_rssi() {
       if (stationList.num > 0) {
         rssi = stationList.sta[0].rssi;
       }
+    } else {
+      
+    }
+    strcpy(current_bssid, "N/A");
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&mode) == ESP_OK) {
+      uint8_t bssid[6] = {};
+      uint8_t channel  = 0;
+      if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
+          wifi_ap_record_t ap_info = {};
+          if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+            memcpy(bssid, ap_info.bssid, 6);
+            channel = ap_info.primary;
+          }
+      } else if (mode == WIFI_MODE_AP) {
+          wifi_config_t cfg = {};
+          if((esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK) &&
+             (esp_wifi_get_mac(WIFI_IF_AP, bssid) == ESP_OK)) {
+            channel = cfg.ap.channel;
+          }
+      } 
+      sprintf(current_bssid, "%02X:%02X:%02X:%02X:%02X:%02X (ch %d)",
+              bssid[0], bssid[1], bssid[2],
+              bssid[3], bssid[4], bssid[5],
+              channel);
+      current_channel = channel;
     }
     avg_rssi_sum += rssi;
     avg_rssi_count++;
@@ -1046,15 +1673,15 @@ void adjust_to_rssi() {
         if(avg_rssi > -55) {
           frame_limit_ms = 1000 / 25; // Up to 25 fps
           if(cameraConfig.quality == 0) quality = 18; // 6 is too crazy for 25 fps
-        } else if(avg_rssi > -65) {
+        } else if(avg_rssi > -60) {
           frame_limit_ms = 1000 / 20; // Up to 20 fps
-          if(cameraConfig.quality == 0) quality = 18;
-        } else if(avg_rssi > -75) {
-          frame_limit_ms = 1000 / 15; // Up to 15 fps
           if(cameraConfig.quality == 0) quality = 30;
+        } else if(avg_rssi > -70) {
+          frame_limit_ms = 1000 / 15; // Up to 15 fps
+          if(cameraConfig.quality == 0) quality = 45;
         } else {
           frame_limit_ms = 1000 / 7; // Up to 7 fps
-          if(cameraConfig.quality == 0) quality = 45;
+          if(cameraConfig.quality == 0) quality = 60;
         }
       }
        
@@ -1123,7 +1750,13 @@ void loop() {
   RedLED.doAnimation();
   adjust_light();
 
-  if(lastMotorCommandTime > 0 && (millis() - lastMotorCommandTime > 5000)) {
+  static uint32_t limitServoUpdate = millis();
+  if(millis() - limitServoUpdate > 40) {
+    limitServoUpdate = millis();
+    Servo1.doAnimation();
+  }
+
+  if(lastMotorCommandTime > 0 && (millis() - lastMotorCommandTime > 3000)) {
     MotorLeft.set(0);
     MotorRight.set(0);
     lastMotorCommandTime = 0;
@@ -1141,17 +1774,11 @@ void loop() {
   if(powerDownTimeout == 0xfffffffful) { powerDown();}
 
   processSerial(); // Check for serial commands 
+  handleGmUdp();
 
-  //if(!APMode) wifiMulti.run(); // Keep WiFi connection alive, will reconnect if connection is lost
-
-  // check WiFi Scan Async process
-  int16_t WiFiScanStatus = WiFi.scanComplete();
-  if(WiFiScanState == 1) {
-    if(WiFiScanStatus >= 0) {
-      WiFiScanState = 2; // Scan done, process results in next loop iteration
-      printScannedNetworks(WiFiScanStatus);
-      WiFiScanState = 0; // Reset to idle after processing
-    }
+  if(!APMode) {
+    wifiRoamTask(RoamForceTriggered); // Check if we should roam to a better AP
+    RoamForceTriggered = false; // Reset roam trigger after handling
   }
 
   delay(10);

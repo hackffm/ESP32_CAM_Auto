@@ -179,6 +179,17 @@ void PwmThing::doAnimation() {
       value = map(timeInCycle, animationSpeed/2, animationSpeed, animationHighValue, animationLowValue);
     }
     set(value, false); // Set value without clearing animation
+  } else if(animationType == 2) { // Linear once from low to high
+    uint32_t elapsed = millis() - animationStartTime;
+    if(elapsed >= animationSpeed) {
+        // Animation done
+        set(animationHighValue, false);
+        animationType = 0; // End animation 
+    } else {
+        // Linear interpolation from lowValue to highValue
+        value = map(elapsed, 0, animationSpeed, animationLowValue, animationHighValue);
+        set(value, false);
+    }
   }
 }
 

@@ -41,6 +41,7 @@ public:
     void startAnimation(int animationType, int speed = 2000, int lowValue = 0, int highValue = 255) {
       animationLowValue = lowValue; animationHighValue = highValue;
       animationSpeed = speed; this->animationType = animationType;
+      animationStartTime = millis();
     }
 
     void doAnimation();
@@ -63,6 +64,7 @@ public:
     int animationLowValue = 0;
     int animationHighValue = 255;
     int animationSpeed = 1000; // in milliseconds
+    uint32_t animationStartTime = 0;
 };
 
 #endif // PWMTHING_H

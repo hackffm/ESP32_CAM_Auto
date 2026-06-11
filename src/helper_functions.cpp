@@ -139,7 +139,7 @@ bool writeFile(const char *path, const char *data) {
 // Function to read a file and return the content as a string
 size_t readFile(const char *path, char *buffer, size_t bufferSize) {
   if(filesystem.exists(path) == false) {
-    // LL_Log.printf("File %s does not exist\r\n", path);
+    Serial.printf("File %s does not exist\r\n", path);
     return 0;
   }
   File file = filesystem.open(path, "r");  
