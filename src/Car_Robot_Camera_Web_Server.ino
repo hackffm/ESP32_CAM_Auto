@@ -168,7 +168,7 @@ struct CameraConfig {
   int size; // 0 = 320x240 (QVGA), 1 = 400x296 (CIF), 2 = 640x480 (VGA), 3 = 800x600 (SVGA), 4 = 1024x768 (XGA), 5 = 1280x1024 (SXGA), 6 = 1600x1200 (UXGA)
   int fps; // Limit FPS, 0 = auto, 1...7 = 2,5,10,15,20,25,30 fps
   int quality; // 0 = auto, 1 very poor (63), 2 poor (42), 3 medium (30), 4 good (18), 5 very good (6)
-} cameraConfig = {0, 1, 0, 0};
+} cameraConfig = {0, 2, 0, 0};
 // current values go to quality and frame_limit_ms in cam_streamhandler.h, they are updated from there when changed 
 
 fs::FS &filesystem = LittleFS;
@@ -204,7 +204,9 @@ void setCameraToConfig() {
     s->set_pll(s, 0, 25, 1, 0, 0, 0, 1, 10); // pushes 8MHz ext to same internally as 20mhz before
     s->set_reg(s, 0x302c, 0xc0, 0x00); // Reduce pad driving strength for better EMI/radio 
     s->set_reg(s, 0x6706, 0x0f, 0x03); // Adjust temperature sampling frequency to 8 MHz XVCLK
-    s->set_brightness(s, 2); // Increase brightness to reduce noise in dark areas
+    // s->set_brightness(s, 0); // Increase brightness to reduce noise in dark areas
+    //s->set_raw_gma(s, 1); s->set_reg(s, 0x5480, 1, 0);
+    //s->set_gainceiling(s, GAINCEILING_32X);
   } else if(s->id.PID == OV2640_PID) {
     if(cameraConfig.rotation == 1) {
       s->set_hmirror(s, 1);
