@@ -470,10 +470,28 @@
   const ZERO_SEND_MAX  = 10;
   let heartbeatTimer   = null;
 
+  /* One request at a time, always with the latest cmd_* values. Firing a new
+     fetch every UPDATE_INTERVAL lets requests pile up while the robot is busy
+     driving; after the stick is released, old "turn" requests can then
+     overtake the "stop". */
+  let sendBusy  = false;
+  let sendAgain = false;
+
   function _doSend() {
+    if (sendBusy) { sendAgain = true; return; }
+    sendBusy  = true;
+    sendAgain = false;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 1000);  // don't let a lost request block the rest
     fetch(`/action?ml=${cmd_ml}&mr=${cmd_mr}&light=${cmd_light}` +
-          `&servo1=${cmd_servo1}&servo2=${cmd_servo2}`)
-      .catch(() => {});
+          `&servo1=${cmd_servo1}&servo2=${cmd_servo2}`,
+          { signal: abort.signal })
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timer);
+        sendBusy = false;
+        if (sendAgain) _doSend();
+      });
   }
 
   function sendData(force = false) {
