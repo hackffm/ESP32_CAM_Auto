@@ -12,7 +12,7 @@
   The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 *********/
 
-const char version_string[] = "V1.15";
+const char version_string[] = "V1.17";
 
 #define MOTOR_1_PIN_1    14
 #define MOTOR_1_PIN_2    15
@@ -43,9 +43,7 @@ char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 
 #include "esp_camera.h"
 #include <WiFi.h>
-#include "esp_wifi.h"
 #include <WiFiUdp.h>
-#include <DNSServer.h> // For captive portal
 #include <ESPmDNS.h>
 #include "esp_timer.h"
 #include "img_converters.h"
@@ -54,6 +52,11 @@ char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #include "soc/soc.h"             // disable brownout problems
 #include "soc/rtc_cntl_reg.h"    // disable brownout problems
 #include "esp_http_server.h"
+#if !defined(CONFIG_HTTPD_WS_SUPPORT) || !CONFIG_HTTPD_WS_SUPPORT
+#error "Enable CONFIG_HTTPD_WS_SUPPORT for native esp_http_server WebSocket support"
+#endif
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "driver/ledc.h" 
 #include <ArduinoOTA.h>
 #include "PwmThing.h"
@@ -64,32 +67,10 @@ char wifi_password[66] = WIFI_PASSWORD; // "REPLACE_WITH_YOUR_PASSWORD";
 #include <ctype.h>
 #include <lwip/sockets.h>
 #include <lwip/inet.h>
+#include "wifi_network.h"
 
 #define ENABLE_OTA 
 int OTA_Status = 0; // 0=not enabled, 1=enabled, 2=in progress
-DNSServer dnsServer;
-bool APMode = false;
-
-// Wi-Fi retry and health-check configuration.
-#define WIFI_INITIAL_CONNECT_MS       (1UL * 30UL * 1000UL)
-#define WIFI_RETRY_WINDOW_MS          (1UL * 30UL * 1000UL)
-#define WIFI_RETRY_BASE_MS            10000UL
-#define WIFI_RETRY_MAX_MS             30000UL
-#define WIFI_HEALTH_INTERVAL_MS       5000UL
-
-void wifiEventHandler(WiFiEvent_t event, WiFiEventInfo_t info);
-void wifiConnectionInit();
-void wifiRequestReconnect();
-void wifiConnectionTask();
-bool wifiStaHealthy();
-void startFallbackAP();
-
-
-IPAddress current_IP(192, 168, 4, 1);
-char      current_ssid[34] = ""; 
-char      current_bssid[34] = ""; 
-int       current_channel = 0;
-int       current_rssi = -50;
 
 PwmThing MotorLeft, MotorRight, Servo1, Servo2, WhiteLED, RedLED;
 
@@ -387,38 +368,250 @@ static esp_err_t index_handler(httpd_req_t *req)
 
 char infotext[256] = "";
 
-static esp_err_t info_handler(httpd_req_t *req){
-  static char info[2048];
-  int info_len = 0;
+static const char *build_info_text(char *info, size_t info_capacity) {
+  const NetworkStatus &networkStatus = networkGetStatus();
+  static int linklosts = 0;
+  if(networkLinkWasLost()) { linklosts++; networkClearLinkLostFlag(); }
+  size_t info_len = 0;
   // sprintf(infotext, "BSSID: %s, Camera: %s", WiFi.BSSIDstr().c_str(), info->name);
-  info_len = snprintf(info, sizeof(info), "%s, Cam-Temp: %d°C, Free heap: %u, Free PSRAM: %u, \r\n", 
+  info_len = snprintf(info, info_capacity, "%s, Cam-Temp: %d°C, Free heap: %u, Free PSRAM: %u, \r\n", 
      infotext, camera_temp, ESP.getFreeHeap(), ESP.getFreePsram());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "SSID: %s, BSSID: %s, IP: %s \r\n", 
-     current_ssid, current_bssid,  current_IP.toString().c_str());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Avg RSSI: %d dBm, FPS: %d/%d, Quality: %d, kBytes/s: %d, Command/s: %d\r\n", 
-     current_rssi, fps, frame_limit_ms?1000/frame_limit_ms:0, quality, bps/1024, cps);    
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "ML: %d, MR: %d, Powerdown timer: %lu s\r\n", 
+  char ip_text[24];
+  snprintf(ip_text, sizeof(ip_text), "%u.%u.%u.%u", networkStatus.ip[0], networkStatus.ip[1], networkStatus.ip[2], networkStatus.ip[3]);
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "SSID: %s, BSSID: %s, IP: %s \r\n", 
+     networkStatus.ssid, networkStatus.bssid, ip_text);
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "Avg RSSI: %d dBm, FPS: %d/%d, Quality: %d, kBytes/s: %d, LinkLosts: %d\r\n", 
+     networkStatus.rssi, fps, frame_limit_ms?1000/frame_limit_ms:0, quality, bps/1024, linklosts);    
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "ML: %d, MR: %d, Powerdown timer: %lu s\r\n", 
      MotorLeft.get(), MotorRight.get(), (powerDownTimeout - (millis() - powerDownTimer))/1000);      
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version: %s %s, Uptime: %lu s\r\n", version_string, CompileTime, millis() / 1000);  
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", "
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "Version: %s %s, Uptime: %lu s\r\n", version_string, CompileTime, millis() / 1000);  
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "| Name=\"%s\", A=\"FPS-Limit (%d fps)\", "
      "B=\"Quality (%d)\", C=\"LED (Boost remaining: %ds)\", D=\"Servo1 (%d)\", E=\"Servo2 (%d)\", ", 
      roboter_name, frame_limit_ms?1000/frame_limit_ms:0, quality, LightVars.boostTime/1000,0, Servo1.getDuty(), Servo2.getDuty());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "lightValue=\"%d\", lightLowValue=\"%d\", lightHighValue=\"%d\", "
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "lightValue=\"%d\", lightLowValue=\"%d\", lightHighValue=\"%d\", "
       "lightLimitLowValue=\"%d\", lightLimitHighValue=\"%d\", lightBoostTime=\"%d\", lightBoostTimeMax=\"%d\", ", 
      LightVars.Value, LightVars.lowValue, LightVars.highValue, LightVars.limitLowValue, LightVars.limitHighValue, 
      LightVars.boostTime/1000, LightVars.boostTimeMax/1000);   
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Servo1Value=\"%d\", Servo1LowValue=\"%d\", Servo1HighValue=\"%d\", " 
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "Servo1Value=\"%d\", Servo1LowValue=\"%d\", Servo1HighValue=\"%d\", " 
       "Servo1RawValue=\"%d\", Servo2Value=\"%d\", Servo2LowValue=\"%d\", Servo2HighValue=\"%d\", Servo2RawValue=\"%d\", ",
      Servo1Vars.Value, Servo1Vars.lowValue, Servo1Vars.highValue, Servo1.getDuty(), 
      Servo2Vars.Value, Servo2Vars.lowValue, Servo2Vars.highValue, Servo2.getDuty());
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Version=\"%s\", ", version_string);
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "Version=\"%s\", ", version_string);
 
+  if (info_len >= info_capacity) info_len = info_capacity - 1;
   char status[255] = "FPS: 12/30, Q:32, RSSI:-75";
-  snprintf(status, sizeof(status), "FPS:%d/%d, Q:%d, RSSI:%d, Ch:%d, kBytes/s: %d, Command/s: %d", fps, frame_limit_ms?1000/frame_limit_ms:0, 
-     quality, current_rssi, current_channel, bps/1024, cps);
-  info_len += snprintf(info + info_len, sizeof(info) - info_len, "Status=\"%s\", ", status);
+  snprintf(status, sizeof(status), "FPS:%d/%d, Q:%d, RSSI:%d, Ch:%d, kBytes/s: %d, LinkLosts: %d", fps, frame_limit_ms?1000/frame_limit_ms:0, 
+     quality, networkStatus.rssi, networkStatus.channel, bps/1024, linklosts);
+  if (info_len < info_capacity) info_len += snprintf(info + info_len, info_capacity - info_len, "Status=\"%s\", ", status);
+  return info;
+}
+
+static esp_err_t info_handler(httpd_req_t *req){
+  static char http_info_buffer[2048];
+  const char *info = build_info_text(http_info_buffer, sizeof(http_info_buffer));
   httpd_resp_set_type(req, "text/plain");
   return httpd_resp_send(req, info, strlen(info));
+}
+
+#define WS_COMMAND_MAX 160
+#define WS_COMMAND_QUEUE_LEN 20
+#define WS_CLIENT_MAX 4
+#define WS_LINK_TIMEOUT_MS 2000UL
+#define WS_COMMAND_MAX_AGE_MS 2000UL
+
+typedef struct { uint32_t queued_at; char text[WS_COMMAND_MAX]; } WsCommand;
+static StaticQueue_t ws_queue_control;
+static uint8_t ws_queue_storage[WS_COMMAND_QUEUE_LEN * sizeof(WsCommand)];
+static QueueHandle_t ws_command_queue = NULL;
+static int ws_client_fds[WS_CLIENT_MAX] = {-1, -1, -1, -1};
+static volatile uint32_t ws_last_rx_ms = 0;
+static volatile bool ws_link_paused = true;
+static char ws_receive_buffer[WS_COMMAND_MAX];
+static char ws_async_status[2048];
+static uint32_t ws_status_last_ms = 0;
+static uint32_t ws_motor_command_ms = 0;
+static bool ws_motor_active = false;
+
+static void ws_stop_motors() {
+  MotorLeft.set(0);
+  MotorRight.set(0);
+  lastMotorCommandTime = 0;
+  ws_motor_active = false;
+}
+
+static void ws_remove_client(int fd) {
+  for (int i = 0; i < WS_CLIENT_MAX; ++i) {
+    if (ws_client_fds[i] == fd) ws_client_fds[i] = -1;
+  }
+  ws_link_paused = true;
+  ws_stop_motors();
+  if (ws_command_queue) xQueueReset(ws_command_queue);
+}
+
+static bool ws_enqueue_control(const char *command) {
+  if (!ws_command_queue || ws_link_paused) return false;
+  WsCommand item;
+  item.queued_at = millis();
+  strlcpy(item.text, command, sizeof(item.text));
+  if (xQueueSend(ws_command_queue, &item, 0) != pdTRUE) {
+    ws_link_paused = true;
+    xQueueReset(ws_command_queue);
+    ws_stop_motors();
+    return false;
+  }
+  return true;
+}
+
+// Apply the motor/servo/light controls accepted over WS, using HTTP query syntax.
+static bool ws_apply_control(const char *query) {
+  const char *keys[] = {"ml", "mr", "x", "y", "light", "servo1", "servo2"};
+  int values[7] = {0};
+  bool changed[7] = {false};
+  char value[24];
+  char query_copy[WS_COMMAND_MAX];
+  strlcpy(query_copy, query, sizeof(query_copy));
+  for (int i = 0; i < 7; ++i) {
+    if (httpd_query_key_value(query_copy, keys[i], value, sizeof(value)) == ESP_OK) {
+      values[i] = atoi(value);
+      changed[i] = true;
+    }
+  }
+  bool any = false;
+  for (int i = 0; i < 7; ++i) any |= changed[i];
+  if (!any) return false;
+
+  if (changed[0] || changed[1] || changed[2] || changed[3]) {
+    int ml = changed[0] ? values[0] : 0;
+    int mr = changed[1] ? values[1] : 0;
+    if (changed[2] || changed[3]) {
+      const int x = changed[2] ? values[2] : 0;
+      const int y = changed[3] ? values[3] : 0;
+      ml = y + x;
+      mr = y - x;
+    }
+    ml = constrain(ml, -255, 255);
+    mr = constrain(mr, -255, 255);
+    MotorLeft.set(ml);
+    MotorRight.set(mr);
+    lastMotorCommandTime = (ml || mr) ? millis() : 0;
+    ws_motor_active = (ml || mr);
+    ws_motor_command_ms = millis();
+  }
+  if (changed[4]) LightVars.requestedValue = constrain(values[4], 0, 255);
+  if (changed[5]) Servo1.startAnimation(2, 500, Servo1.get(), values[5]);
+  if (changed[6]) Servo2.set(values[6]);
+  return true;
+}
+
+static void ws_queue_send_work(void *arg) {
+  const int fd = (int)(intptr_t)arg;
+  httpd_ws_frame_t frame = {};
+  frame.type = HTTPD_WS_TYPE_TEXT;
+  frame.payload = (uint8_t *)ws_async_status;
+  frame.len = strlen(ws_async_status);
+  esp_err_t err = httpd_ws_send_frame_async(camera_httpd, fd, &frame);
+  if (err != ESP_OK) ws_remove_client(fd);
+}
+
+static esp_err_t ws_handler(httpd_req_t *req) {
+  const int fd = httpd_req_to_sockfd(req);
+  if (req->method == HTTP_GET) {
+    int slot = -1;
+    for (int i = 0; i < WS_CLIENT_MAX; ++i) {
+      if (ws_client_fds[i] == fd) { slot = i; break; }
+      if (slot < 0 && ws_client_fds[i] < 0) slot = i;
+    }
+    if (slot < 0) return ESP_FAIL;
+    ws_client_fds[slot] = fd;
+    ws_last_rx_ms = millis();
+    ws_link_paused = false;
+    return ESP_OK;
+  }
+  httpd_ws_frame_t frame = {};
+  frame.type = HTTPD_WS_TYPE_TEXT;
+  esp_err_t err = httpd_ws_recv_frame(req, &frame, 0);
+  if (err != ESP_OK) { ws_remove_client(fd); return err; }
+  if (frame.len >= sizeof(ws_receive_buffer)) return ESP_FAIL;
+  frame.payload = (uint8_t *)ws_receive_buffer;
+  err = httpd_ws_recv_frame(req, &frame, sizeof(ws_receive_buffer) - 1);
+  if (err != ESP_OK) { ws_remove_client(fd); return err; }
+  if (frame.type == HTTPD_WS_TYPE_CLOSE) { ws_remove_client(fd); return ESP_OK; }
+  if (frame.type == HTTPD_WS_TYPE_PING) {
+    httpd_ws_frame_t pong = {};
+    pong.type = HTTPD_WS_TYPE_PONG;
+    pong.payload = frame.payload;
+    pong.len = frame.len;
+    return httpd_ws_send_frame(req, &pong);
+  }
+  if (frame.type == HTTPD_WS_TYPE_PONG) { ws_last_rx_ms = millis(); return ESP_OK; }
+  if (frame.type != HTTPD_WS_TYPE_TEXT) return ESP_OK;
+  ws_receive_buffer[frame.len] = '\0';
+  ws_last_rx_ms = millis();
+  ws_link_paused = false;
+
+  char *save = NULL;
+  bool stop_seen_in_batch = false;
+  for (char *part = strtok_r(ws_receive_buffer, "\n;", &save); part; part = strtok_r(NULL, "\n;", &save)) {
+    while (*part == ' ' || *part == '\r' || *part == '\t') ++part;
+    size_t n = strlen(part);
+    while (n && (part[n - 1] == ' ' || part[n - 1] == '\r' || part[n - 1] == '\t')) part[--n] = '\0';
+    if (!n || strcmp(part, "ping") == 0) continue;
+    char temp[WS_COMMAND_MAX];
+    strlcpy(temp, part, sizeof(temp));
+    char *token = NULL;
+    bool has_ml = false, has_mr = false, has_x = false, has_y = false;
+    int ml_value = 1, mr_value = 1, x_value = 1, y_value = 1;
+    for (char *pair = strtok_r(temp, "&", &token); pair; pair = strtok_r(NULL, "&", &token)) {
+      if (!strncmp(pair, "ml=", 3)) { has_ml = true; ml_value = atoi(pair + 3); }
+      if (!strncmp(pair, "mr=", 3)) { has_mr = true; mr_value = atoi(pair + 3); }
+      if (!strncmp(pair, "x=", 2)) { has_x = true; x_value = atoi(pair + 2); }
+      if (!strncmp(pair, "y=", 2)) { has_y = true; y_value = atoi(pair + 2); }
+    }
+    const bool stop = (has_ml && has_mr && ml_value == 0 && mr_value == 0) ||
+                      (has_x && has_y && x_value == 0 && y_value == 0);
+    if (stop) {
+      ws_stop_motors();
+      if (ws_command_queue) xQueueReset(ws_command_queue);
+      ws_apply_control(part);
+      stop_seen_in_batch = true;
+    } else if (!stop_seen_in_batch && !ws_enqueue_control(part)) {
+      return ESP_FAIL;
+    }
+  }
+  return ESP_OK;
+}
+
+static void ws_service() {
+  const uint32_t now = millis();
+  bool has_client = false;
+  for (int i = 0; i < WS_CLIENT_MAX; ++i) {
+    int fd = ws_client_fds[i];
+    if (fd >= 0) {
+      if (httpd_ws_get_fd_info(camera_httpd, fd) != HTTPD_WS_CLIENT_WEBSOCKET) {
+        ws_remove_client(fd);
+      } else has_client = true;
+    }
+  }
+  if (ws_motor_active && (uint32_t)(now - ws_motor_command_ms) > WS_LINK_TIMEOUT_MS) ws_stop_motors();
+  if (has_client && now - ws_last_rx_ms > WS_LINK_TIMEOUT_MS) {
+    ws_link_paused = true;
+    if (ws_command_queue) xQueueReset(ws_command_queue);
+    ws_stop_motors();
+  }
+  if (ws_link_paused && has_client && now - ws_last_rx_ms <= WS_LINK_TIMEOUT_MS) ws_link_paused = false;
+  if (!ws_link_paused && ws_command_queue) {
+    WsCommand item;
+    while (xQueueReceive(ws_command_queue, &item, 0) == pdTRUE) {
+      if ((uint32_t)(now - item.queued_at) <= WS_COMMAND_MAX_AGE_MS) ws_apply_control(item.text);
+    }
+  }
+  if (has_client && !ws_link_paused && now - ws_status_last_ms >= 1000) {
+    ws_status_last_ms = now;
+    build_info_text(ws_async_status, sizeof(ws_async_status));
+    for (int i = 0; i < WS_CLIENT_MAX; ++i) {
+      if (ws_client_fds[i] >= 0) httpd_queue_work(camera_httpd, ws_queue_send_work, (void *)(intptr_t)ws_client_fds[i]);
+    }
+  }
 }
 
 static esp_err_t cors_options_handler(httpd_req_t *req) {
@@ -658,14 +851,18 @@ static esp_err_t cmd_handler(httpd_req_t *req){
       }
       if((strcmp(buf, "wifi_scan") == 0)) {
         Serial.println("Scan Wifis...");
-        int n = WiFi.scanNetworks(false, true);
+        int n = networkScanNetworks();
         String json = "[";
+        bool firstResult = true;
         for (int i = 0; i < n; i++) {
-          if (i > 0) json += ",";
-          json += "{\"ssid\":\"" + WiFi.SSID(i) + "\"";
-          json += ",\"bssid\":\"" + WiFi.BSSIDstr(i) + "\"";
-          json += ",\"rssi\":"   + String(WiFi.RSSI(i));
-          json += ",\"auth\":"   + String((int)WiFi.encryptionType(i));
+          NetworkScanResult result = {};
+          if (!networkGetScanResult(i, result)) continue;
+          if (!firstResult) json += ",";
+          firstResult = false;
+          json += "{\"ssid\":\"" + String(result.ssid) + "\"";
+          json += ",\"bssid\":\"" + String(result.bssid) + "\"";
+          json += ",\"rssi\":"   + String(result.rssi);
+          json += ",\"auth\":"   + String(result.auth);
           json += "}";
         }
         json += "]";
@@ -702,7 +899,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
       if((httpd_query_key_value(buf, "reconnect", strbuf, sizeof(strbuf)) == ESP_OK)) {
         Serial.println("WiFi reconnect requested");
         httpd_resp_sendstr(req, "ok reconnecting triggered...");
-        wifiRequestReconnect();
+        networkRequestReconnect(wifi_ssid, wifi_password, roboter_name);
         free(buf);
         return ESP_OK;
       }
@@ -727,7 +924,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
         httpd_resp_sendstr(req, "Triggered...");
         delay(100);
         free(buf);
-        wifiRequestReconnect();
+        networkRequestReconnect(wifi_ssid, wifi_password, roboter_name);
         return ESP_OK;
       }
     } else {
@@ -751,6 +948,7 @@ static esp_err_t cmd_handler(httpd_req_t *req){
 }
 
 void startCameraServer(){
+  ws_command_queue = xQueueCreateStatic(WS_COMMAND_QUEUE_LEN, sizeof(WsCommand), ws_queue_storage, &ws_queue_control);
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
   httpd_uri_t index_uri = {
@@ -783,6 +981,9 @@ void startCameraServer(){
     .handler   = cmd_handler,
     .user_ctx  = NULL
   };
+  httpd_uri_t ws_uri = {
+    .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .user_ctx = NULL, .is_websocket = true
+  };
   httpd_uri_t stream_uri = {
     .uri       = "/stream",
     .method    = HTTP_GET,
@@ -801,6 +1002,7 @@ void startCameraServer(){
     httpd_register_uri_handler(camera_httpd, &favicon_uri);
     httpd_register_uri_handler(camera_httpd, &cmd_uri);
     httpd_register_uri_handler(camera_httpd, &info_uri);
+    httpd_register_uri_handler(camera_httpd, &ws_uri);
     httpd_register_err_handler(camera_httpd, HTTPD_404_NOT_FOUND, http_404_error_handler);
   } else Serial.println("Failed to start camera HTTP server");
   config.server_port += 1; // Need extra port and server otherwise streaming blocks control commands
@@ -810,6 +1012,16 @@ void startCameraServer(){
     httpd_register_uri_handler(stream_httpd, &cors_options); 
   } else Serial.println("Failed to start stream HTTP server");
   CameraRunning = true;
+}
+
+static void handleNetworkIndicator(NetworkIndicator indicator) {
+  if (indicator == NetworkIndicator::Connecting) {
+    RedLED.startAnimation(1, 200);
+  } else if (indicator == NetworkIndicator::FallbackAp) {
+    RedLED.startAnimation(1, 500);
+  } else {
+    RedLED.startAnimation(1, 4000);
+  }
 }
 
 void setup() {
@@ -901,39 +1113,33 @@ void setup() {
 
   loadLightServoLowHighVals();
 
-  // Wi-Fi connection. The connection task keeps retrying without probing the gateway.
-  WiFi.persistent(false);
-  WiFi.setHostname(roboter_name);
-  WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  WiFi.onEvent(wifiEventHandler);
+  // Select STA or fallback AP once during boot; runtime retries are STA-only.
   WhiteLED.startAnimation(1, 200, 0, 32);
   Serial.printf("Connecting to WiFi SSID: %s\n", wifi_ssid);
-  wifiConnectionInit();
-  uint32_t initialConnectStart = millis();
-  while (!wifiStaHealthy() && (millis() - initialConnectStart < WIFI_INITIAL_CONNECT_MS)) {
-    wifiConnectionTask();
+  networkBegin(wifi_ssid, wifi_password, roboter_name, handleNetworkIndicator);
+  const uint32_t initialConnectStart = millis();
+  while (!networkStaHealthy() &&
+         (uint32_t)(millis() - initialConnectStart) < NETWORK_INITIAL_CONNECT_MS) {
+    networkTask();
     RedLED.doAnimation();
     WhiteLED.doAnimation();
     delay(20);
   }
+  const bool staOk = networkStaHealthy();
 
-  if (!wifiStaHealthy()) {
-    Serial.println("WiFi connection effort exhausted; opening AP+STA mode.");
-    RedLED.set(255);
-    startFallbackAP();
-  } else {
-    APMode = false;
-    current_IP = WiFi.localIP();
-    strlcpy(current_ssid, wifi_ssid, sizeof(current_ssid));
+  if (staOk) {
     RedLED.startAnimation(1, 4000);
+    Serial.printf("\nWiFi connected. Camera Stream Ready! Go to: http://%s or http://%s.local\n",
+                  networkGetStatus().ip.toString().c_str(), roboter_name);
+    MDNS.begin(roboter_name);
+    MDNS.addService("_http", "_tcp", 80);
+  } else {
+    Serial.println("Initial WiFi connection failed; starting permanent open AP mode.");
+    RedLED.set(255);
+    networkStartFallbackAP();
+    Serial.printf("Fallback AP ready. Connect to %s and open http://%s\n",
+                  roboter_name, networkGetStatus().ip.toString().c_str());
   }
-  //esp_wifi_set_max_tx_power(40);
-
-  Serial.printf("\nWiFi connected. Camera Stream Ready! Go to: http://%s or http://%s.local\n", current_IP.toString().c_str(), roboter_name);
-  MDNS.begin(roboter_name);
-  MDNS.addService("_http", "_tcp", 80);
   #ifdef ENABLE_OTA
     ArduinoOTA.onStart([]() {
       // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
@@ -1008,7 +1214,7 @@ void gotIdKeyValue(char *id, char *key, int value_typ, int value_i, char *value_
 
   if (strcmp(key, "ping") == 0) {
     snprintf(reply, sizeof(reply), "#%s:pong=%d,rssi=%d,fps=%d,fpslim=%d,quality=%d,kbs=%d,cps=%d", roboter_name, value_i, 
-    current_rssi, fps, frame_limit_ms?1000/frame_limit_ms:0, quality, bps/1024, cps);
+    networkGetStatus().rssi, fps, frame_limit_ms?1000/frame_limit_ms:0, quality, bps/1024, cps);
     gmReplyToSender(reply); // answer the sender directly
   }
   if((strcmp(key, "fileRead") == 0) && (value_typ == 2)) {
@@ -1231,163 +1437,13 @@ void powerDown() {
   httpd_stop(stream_httpd);
   esp_camera_deinit();
   digitalWrite(XCLK_GPIO_NUM, LOW);
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  esp_wifi_deinit();
+  networkShutdown();
   RedLED.set(0);
   Serial.println("Power down!");
   Serial.flush(); 
   delay(100);
   gpio_deep_sleep_hold_en();
   esp_deep_sleep_start();
-}
-
-// Wi-Fi connection state machine. It validates association and DHCP locally;
-// it never opens a TCP or ICMP connection to the gateway.
-
-static uint32_t wifiNextAttemptMs = 0;
-static uint32_t wifiRetryStartedMs = 0;
-static uint32_t wifiLastHealthMs = 0;
-static uint32_t wifiRetryDelayMs = WIFI_RETRY_BASE_MS;
-static uint8_t wifiRetryCount = 0;
-static bool wifiScanFound = false;
-static volatile bool wifiGotIpEvent = false;
-static volatile bool wifiLostIpEvent = false;
-static volatile bool wifiDisconnectedEvent = false;
-
-void wifiEventHandler(WiFiEvent_t event, WiFiEventInfo_t info) {
-  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-    wifiDisconnectedEvent = true;
-    uint8_t reason = info.wifi_sta_disconnected.reason;
-    Serial.printf("WiFi disconnected, reason=%u", reason);
-    switch (reason) {
-      case WIFI_REASON_AUTH_EXPIRE: Serial.println(" (AUTH_EXPIRE)"); break;
-      case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT: Serial.println(" (4WAY_HANDSHAKE_TIMEOUT)"); break;
-      case WIFI_REASON_NO_AP_FOUND: Serial.println(" (NO_AP_FOUND)"); break;
-      default: Serial.println(); break;
-    }
-  } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-    wifiGotIpEvent = true;
-    Serial.printf("WiFi got IP: %s\n", WiFi.localIP().toString().c_str());
-  } else if (event == ARDUINO_EVENT_WIFI_STA_LOST_IP) {
-    wifiLostIpEvent = true;
-    Serial.println("WiFi lost IP");
-  }
-}
-
-bool wifiStaHealthy() {
-  wifi_ap_record_t apInfo = {};
-  IPAddress ip = WiFi.localIP();
-  return WiFi.status() == WL_CONNECTED && WiFi.RSSI() != 0 &&
-         esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK &&
-         ip != IPAddress(0, 0, 0, 0);
-}
-
-bool wifiScanForConfiguredSsid() {
-  int n = WiFi.scanNetworks(false, true);
-  wifiScanFound = false;
-  if (n > 0) {
-    for (int i = 0; i < n; ++i) {
-      if (strcmp(WiFi.SSID(i).c_str(), wifi_ssid) == 0) {
-        wifiScanFound = true;
-              Serial.printf("Configured SSID found: ch=%d rssi=%d auth=%d\n",
-                    WiFi.channel(i), WiFi.RSSI(i), (int)WiFi.encryptionType(i));
-        break;
-      }
-    }
-  }
-  WiFi.scanDelete();
-  return wifiScanFound;
-}
-
-void wifiBeginAttempt() {
-  uint32_t now = millis();
-  if (now < wifiNextAttemptMs) return;
-  wifiRetryCount++;
-  RedLED.startAnimation(1, 200);
-  Serial.printf("WiFi attempt %u: scanning for SSID %s\n", wifiRetryCount, wifi_ssid);
-  if (wifiScanForConfiguredSsid()) {
-    WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);
-    esp_wifi_set_country_code("DE", true);
-    Serial.println("Configured SSID found; starting STA association");
-    WiFi.begin(wifi_ssid, wifi_password);
-  } else {
-    Serial.println("Configured SSID not found; retrying after backoff");
-  }
-  wifiNextAttemptMs = now + wifiRetryDelayMs;
-  if (wifiRetryDelayMs < WIFI_RETRY_MAX_MS) wifiRetryDelayMs *= 2;
-  if (wifiRetryDelayMs > WIFI_RETRY_MAX_MS) wifiRetryDelayMs = WIFI_RETRY_MAX_MS;
-}
-
-void wifiConnectionInit() {
-  WiFi.mode(APMode ? WIFI_AP_STA : WIFI_STA);
-   // Accept also WPA/WPA2 mixed and WPA-TKIP access points (default in core 3.x is WPA2_PSK)
-  WiFi.setMinSecurity(WIFI_AUTH_WPA_PSK);   // use WIFI_AUTH_OPEN for open networks
-  WiFi.disconnect(true, false);
-  delay(50);
-  WiFi.setSleep(false);
-  WiFi.setAutoReconnect(true);
-  wifiRetryStartedMs = millis();
-  wifiRetryDelayMs = WIFI_RETRY_BASE_MS;
-  wifiRetryCount = 0;
-  wifiNextAttemptMs = 0;
-  wifiBeginAttempt();
-}
-
-void wifiRequestReconnect() {
-  Serial.println("WiFi reconnect requested");
-  wifiConnectionInit();
-}
-
-void startFallbackAP() {
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.AP.begin();
-  WiFi.AP.create(roboter_name);
-  WiFi.AP.enableDhcpCaptivePortal();
-  APMode = true;
-  RedLED.startAnimation(1, 500);
-  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer.start(53, "*", WiFi.softAPIP());
-  current_IP = WiFi.softAPIP();
-  wifiRetryStartedMs = millis();
-  wifiNextAttemptMs = 0;
-  wifiRetryDelayMs = WIFI_RETRY_BASE_MS;
-  Serial.printf("Fallback AP started at %s; STA retries continue in background\n", current_IP.toString().c_str());
-}
-
-void wifiConnectionTask() {
-  uint32_t now = millis();
-  if (wifiDisconnectedEvent) {
-    wifiDisconnectedEvent = false;
-    wifiBeginAttempt();
-  }
-  if (wifiGotIpEvent || wifiLostIpEvent) {
-    wifiGotIpEvent = false;
-    wifiLostIpEvent = false;
-  }
-  if (now - wifiLastHealthMs >= WIFI_HEALTH_INTERVAL_MS) {
-      wifiLastHealthMs = now;  
-      if (wifiStaHealthy()) {
-        current_IP = WiFi.localIP();
-        strlcpy(current_ssid, wifi_ssid, sizeof(current_ssid));
-        // Serial.printf("WiFi health OK: RSSI=%d, IP=%s\n", WiFi.RSSI(), current_IP.toString().c_str());
-        wifiNextAttemptMs = now + wifiRetryDelayMs;
-        if (APMode) {
-          APMode = false;
-          dnsServer.stop();
-          WiFi.mode(WIFI_STA);
-          current_IP = WiFi.localIP();
-          RedLED.startAnimation(1, 4000);
-          Serial.println("STA recovered; leaving fallback AP");
-        }
-      } else {
-        if(!APMode) {
-          Serial.println("WiFi health check failed; STA not healthy");
-          if (now >= wifiNextAttemptMs) wifiBeginAttempt();
-          // if (!APMode && now - wifiRetryStartedMs >= WIFI_RETRY_WINDOW_MS) startFallbackAP();
-        }
-      }
-  }
 }
 
 void processSerial() {
@@ -1430,7 +1486,7 @@ void processSerial() {
         writeFile("/wifi_password.txt", wifi_password);
         Serial.printf("Updated WiFi password to: %s\n", wifi_password);
       } else if(strncmp(inputBuffer, "scan", 4) == 0) {
-        wifiRequestReconnect();
+        networkRequestReconnect(wifi_ssid, wifi_password, roboter_name);
       } else if(strncmp(inputBuffer, "off", 3) == 0) {
         powerDown();        
       } else if(strncmp(inputBuffer, "t1", 2) == 0) {
@@ -1450,76 +1506,24 @@ void processSerial() {
 }
 
 void adjust_to_rssi() {
-  static uint32_t last_adjust_time = 0;
-  uint32_t now = millis();
-  
-  static int avg_rssi_sum = 0;
-  static int avg_rssi_count = 0;
+  if (!networkSampleStatus()) return;
 
-  if (now - last_adjust_time >= 100) {
-    // for AP mode take RSSI from 1st connected station
-    int rssi = WiFi.RSSI();
-    if (APMode) {
-      wifi_sta_list_t stationList;
-      esp_wifi_ap_get_sta_list(&stationList);
-      if (stationList.num > 0) {
-        rssi = stationList.sta[0].rssi;
-      }
+  int avg_rssi = networkGetStatus().rssi;
+  // Adjust camera settings based on average RSSI if set to auto.
+  if(cameraConfig.fps == 0) {
+    if(avg_rssi > -55) {
+      frame_limit_ms = 1000 / 25; // Up to 25 fps
+      if(cameraConfig.quality == 0) quality = 18; // 6 is too crazy for 25 fps
+    } else if(avg_rssi > -60) {
+      frame_limit_ms = 1000 / 20; // Up to 20 fps
+      if(cameraConfig.quality == 0) quality = 30;
+    } else if(avg_rssi > -70) {
+      frame_limit_ms = 1000 / 15; // Up to 15 fps
+      if(cameraConfig.quality == 0) quality = 45;
     } else {
-      
+      frame_limit_ms = 1000 / 7; // Up to 7 fps
+      if(cameraConfig.quality == 0) quality = 60;
     }
-    strcpy(current_bssid, "N/A");
-    wifi_mode_t mode = WIFI_MODE_NULL;
-    if (esp_wifi_get_mode(&mode) == ESP_OK) {
-      uint8_t bssid[6] = {};
-      uint8_t channel  = 0;
-      if (mode == WIFI_MODE_STA || mode == WIFI_MODE_APSTA) {
-          wifi_ap_record_t ap_info = {};
-          if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
-            memcpy(bssid, ap_info.bssid, 6);
-            channel = ap_info.primary;
-          }
-      } else if (mode == WIFI_MODE_AP) {
-          wifi_config_t cfg = {};
-          if((esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK) &&
-             (esp_wifi_get_mac(WIFI_IF_AP, bssid) == ESP_OK)) {
-            channel = cfg.ap.channel;
-          }
-      } 
-      sprintf(current_bssid, "%02X:%02X:%02X:%02X:%02X:%02X (ch %d)",
-              bssid[0], bssid[1], bssid[2],
-              bssid[3], bssid[4], bssid[5],
-              channel);
-      current_channel = channel;
-    }
-    avg_rssi_sum += rssi;
-    avg_rssi_count++;
-    if(avg_rssi_count >= 10) { // Update every 10 samples
-      int avg_rssi = avg_rssi_sum / avg_rssi_count;
-      current_rssi = avg_rssi;
-
-      // Adjust camera settings based on average RSSI if set to auto
-      // currently only for 640x480
-      if(cameraConfig.fps == 0) {
-        if(avg_rssi > -55) {
-          frame_limit_ms = 1000 / 25; // Up to 25 fps
-          if(cameraConfig.quality == 0) quality = 18; // 6 is too crazy for 25 fps
-        } else if(avg_rssi > -60) {
-          frame_limit_ms = 1000 / 20; // Up to 20 fps
-          if(cameraConfig.quality == 0) quality = 30;
-        } else if(avg_rssi > -70) {
-          frame_limit_ms = 1000 / 15; // Up to 15 fps
-          if(cameraConfig.quality == 0) quality = 45;
-        } else {
-          frame_limit_ms = 1000 / 7; // Up to 7 fps
-          if(cameraConfig.quality == 0) quality = 60;
-        }
-      }
-       
-      avg_rssi_sum = 0;
-      avg_rssi_count = 0;
-    }
-    last_adjust_time = now;
   }
 }
 
@@ -1576,7 +1580,7 @@ void loop() {
   ArduinoOTA.handle(); // allow OTA updates
   #endif
 
-  if(APMode) dnsServer.processNextRequest(); // Handle DNS requests in AP mode for captive portal
+  ws_service();
 
   RedLED.doAnimation();
   adjust_light();
@@ -1607,8 +1611,7 @@ void loop() {
   processSerial(); // Check for serial commands 
   handleGmUdp();
 
-  wifiConnectionTask();
+  networkTask();
 
   delay(10);
 }
-

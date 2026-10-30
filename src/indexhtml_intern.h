@@ -59,6 +59,8 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
       border-bottom: 0.5px solid rgba(255,255,255,0.12);
     }
     #topbar .logo { height: 30px; width: auto; flex: none; display: block; }
+    #connection-controls { display:flex; align-items:center; gap:5px; flex:none; font-size:11px; color:var(--text2); }
+    #connection-mode { max-width:88px; padding:4px; border-radius:6px; background:#242426; color:#fff; border:1px solid #555; font-size:11px; }
     #title {
       flex: 0 1 auto; min-width: 0;
       font-size: 16px; font-weight: 600; color: #fff;
@@ -318,6 +320,7 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
     <img class="logo" alt="hackffm.de" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADMAAAA/AgMAAAAwDRjCAAAADFBMVEVuAAAoKCjwrV74+Ph5Qa9/AAAAhElEQVQoz6XTSQrAIAwF0F7yr3O6HDG7ljTRUhW+0sGF+CADEd28W/u20oG2/kivszJVKpcWTKSmUy3yABv6dUIRmHAJryUGnynv2bgko4RKJBpY7EReI6MNkZUOTiUSanmDyjxGtZrBkVVw542KMDcq5BVJV7NXnXairOLv9eldP/5HJ2k/9FhNcZTRAAAAAElFTkSuQmCC">
     <div id="title">Hackffm ESP32 CAM Bot</div>
     <div id="topstatus"></div>
+    <div id="connection-controls"><span id="connection-indicator">HTTP</span><select id="connection-mode" aria-label="Connection mode"><option value="auto">Auto</option><option value="ws">WebSocket</option><option value="http">HTTP</option></select></div>
     <button id="btn-fullscreen" class="gear-btn" aria-label="Vollbild">
       <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/>
@@ -748,11 +751,72 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   let zeroSendCount    = 0;
   const ZERO_SEND_MAX  = 10;
   let heartbeatTimer   = null;
+  const wsModeSelect = document.getElementById("connection-mode");
+  const connectionIndicator = document.getElementById("connection-indicator");
+  let controlSocket = null;
+  let activeMode = "http";
+  let reconnectTimer = null;
+  let userSelectedMode = "auto";
+  const commandUrl = () => `/action?ml=${cmd_ml}&mr=${cmd_mr}&light=${cmd_light}` +
+          `&servo1=${cmd_servo1}&servo2=${cmd_servo2}`;
+
+  function setConnectionMode(mode) {
+    activeMode = mode;
+    connectionIndicator.textContent = mode === "ws" ? "WS" : "HTTP";
+    connectionIndicator.style.color = mode === "ws" ? "#30d158" : "#ff9f0a";
+  }
+
+  function closeControlSocket() {
+    if (controlSocket) {
+      const socket = controlSocket;
+      controlSocket = null;
+      socket.onclose = null;
+      try { socket.close(); } catch(e) {}
+    }
+  }
+
+  function connectControlSocket() {
+    if (userSelectedMode === "http" || controlSocket || !("WebSocket" in window)) return;
+    try {
+      const socket = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`);
+      controlSocket = socket;
+      socket.onopen = () => { if (controlSocket === socket) setConnectionMode("ws"); };
+      socket.onmessage = event => {
+        const parts = String(event.data).split("|");
+        document.getElementById("info").textContent = parts[0].trim();
+        if (parts.length > 1) parseTokens(parts[1]);
+      };
+      socket.onerror = () => { try { socket.close(); } catch(e) {} };
+      socket.onclose = () => {
+        if (controlSocket === socket) controlSocket = null;
+        setConnectionMode("http");
+        if (userSelectedMode !== "http") {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(connectControlSocket, 2000);
+        }
+      };
+    } catch(e) {
+      controlSocket = null;
+      setConnectionMode("http");
+      if (userSelectedMode !== "http") reconnectTimer = setTimeout(connectControlSocket, 2000);
+    }
+  }
+
+  wsModeSelect.addEventListener("change", () => {
+    userSelectedMode = wsModeSelect.value;
+    clearTimeout(reconnectTimer);
+    closeControlSocket();
+    if (userSelectedMode === "http") setConnectionMode("http");
+    else connectControlSocket();
+  });
+  connectControlSocket();
 
   function _doSend() {
-    fetch(`/action?ml=${cmd_ml}&mr=${cmd_mr}&light=${cmd_light}` +
-          `&servo1=${cmd_servo1}&servo2=${cmd_servo2}`)
-      .catch(() => {});
+    if (activeMode === "ws" && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
+      controlSocket.send(commandUrl().split("?")[1]);
+    } else {
+      fetch(commandUrl()).catch(() => {});
+    }
   }
 
   function sendData(force = false) {
@@ -770,23 +834,26 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   }
 
   function heartbeatTick() {
-    if (joystickActive) {
+    if (activeMode === "ws" && controlSocket && controlSocket.readyState === WebSocket.OPEN) {
+      controlSocket.send("ping");
+      if (joystickActive) _doSend();
+      return;
+    }
+    if (joystickActive) _doSend();
+    else if (zeroSendCount < ZERO_SEND_MAX) {
       _doSend();
+      zeroSendCount++;
     } else {
-      if (zeroSendCount < ZERO_SEND_MAX) {
-        _doSend();
-        zeroSendCount++;
-      } else {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
     }
   }
 
   function startHeartbeat() {
     if (heartbeatTimer) return;
-    heartbeatTimer = setInterval(heartbeatTick, 1000);
+    heartbeatTimer = setInterval(heartbeatTick, 500);
   }
+  startHeartbeat();
 
   /* ── /info polling ── */
   const titleElement = document.getElementById("title");
@@ -815,13 +882,15 @@ static const char PROGMEM INDEX_HTML[] = R"rawliteral(
   };
 
   async function updateInfo() {
-    try {
-      const res  = await fetch('/info');
-      const txt  = await res.text();
-      const parts = txt.split("|");
-      document.getElementById("info").textContent = parts[0].trim();
-      if (parts.length > 1) parseTokens(parts[1]);
-    } catch(e) {}
+    if (activeMode !== "ws") {
+      try {
+        const res  = await fetch('/info');
+        const txt  = await res.text();
+        const parts = txt.split("|");
+        document.getElementById("info").textContent = parts[0].trim();
+        if (parts.length > 1) parseTokens(parts[1]);
+      } catch(e) {}
+    }
     setTimeout(updateInfo, 1000);
   }
 
